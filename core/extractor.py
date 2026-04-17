@@ -7,10 +7,16 @@ without requiring signature cipher decryption.
 
 import json
 import re
+import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Optional
+
+# Ensure UTF-8 output on Windows (video titles may contain non-ASCII chars)
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 
 from core.utils import (
     ITAG_MAP,
@@ -20,37 +26,134 @@ from core.utils import (
 )
 
 
-# ─── InnerTube Client Config ─────────────────────────────────────────────────
-# ANDROID_VR returns direct URLs without signatureCipher
+# ─── InnerTube Client Configs ────────────────────────────────────────────────
+# Fallback order (best to worst bypass):
+#   IOS → ANDROID → ANDROID_VR → TVHTML5 → WEB
+#
+# IOS / ANDROID give direct URLs without cipher and rarely trigger bot checks.
+# TVHTML5 bypasses age-restriction but is being blocked more often.
 
 _INNERTUBE_URL = "https://www.youtube.com/youtubei/v1/player"
 
-_ANDROID_VR_CLIENT = {
-    "clientName": "ANDROID_VR",
-    "clientVersion": "1.60.19",
-    "androidSdkVersion": 32,
-    "hl": "en",
-    "timeZone": "UTC",
-    "utcOffsetMinutes": 0,
+_CLIENTS: dict[str, dict] = {
+    # ── iOS app — best bypass, direct URLs, rarely flagged ─────────────────
+    "IOS": {
+        "client": {
+            "clientName": "IOS",
+            "clientVersion": "19.29.1",
+            "deviceMake": "Apple",
+            "deviceModel": "iPhone16,2",
+            "osName": "iPhone",
+            "osVersion": "17.5.1.21F90",
+            "hl": "en",
+            "gl": "US",
+            "timeZone": "UTC",
+            "utcOffsetMinutes": 0,
+        },
+        "headers": {
+            "Content-Type": "application/json",
+            "User-Agent": (
+                "com.google.ios.youtube/19.29.1 "
+                "(iPhone16,2; U; CPU iPhone OS 17_5_1 like Mac OS X)"
+            ),
+            "X-YouTube-Client-Name": "5",
+            "X-YouTube-Client-Version": "19.29.1",
+        },
+    },
+    # ── Android app — direct URLs, good bypass ─────────────────────────────
+    "ANDROID": {
+        "client": {
+            "clientName": "ANDROID",
+            "clientVersion": "19.30.36",
+            "androidSdkVersion": 34,
+            "hl": "en",
+            "gl": "US",
+            "timeZone": "UTC",
+            "utcOffsetMinutes": 0,
+        },
+        "headers": {
+            "Content-Type": "application/json",
+            "User-Agent": (
+                "com.google.android.youtube/19.30.36 "
+                "(Linux; U; Android 14; en_US; Pixel 7 Build/UQ1A.240205.002) gzip"
+            ),
+            "X-YouTube-Client-Name": "3",
+            "X-YouTube-Client-Version": "19.30.36",
+            "Origin": "https://www.youtube.com",
+        },
+    },
+    # ── Android VR — direct URLs, may trigger bot check ────────────────────
+    "ANDROID_VR": {
+        "client": {
+            "clientName": "ANDROID_VR",
+            "clientVersion": "1.60.19",
+            "androidSdkVersion": 32,
+            "hl": "en",
+            "timeZone": "UTC",
+            "utcOffsetMinutes": 0,
+        },
+        "headers": {
+            "Content-Type": "application/json",
+            "User-Agent": (
+                "com.google.android.apps.youtube.vr.oculus/1.60.19 "
+                "(Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip"
+            ),
+            "X-YouTube-Client-Name": "ANDROID_VR",
+            "X-YouTube-Client-Version": "1.60.19",
+            "Origin": "https://www.youtube.com",
+        },
+    },
+    # ── TV embed — bypasses age-restriction ────────────────────────────────
+    "TVHTML5": {
+        "client": {
+            "clientName": "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
+            "clientVersion": "2.0",
+            "hl": "en",
+            "timeZone": "UTC",
+            "utcOffsetMinutes": 0,
+        },
+        "headers": {
+            "Content-Type": "application/json",
+            "User-Agent": (
+                "Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 "
+                "(KHTML, like Gecko) Version/6.0 TV Safari/538.1"
+            ),
+            "X-YouTube-Client-Name": "85",
+            "X-YouTube-Client-Version": "2.0",
+            "Origin": "https://www.youtube.com",
+            "Referer": "https://www.youtube.com/",
+        },
+    },
+    # ── Web browser — last resort, streams may need cipher ─────────────────
+    "WEB": {
+        "client": {
+            "clientName": "WEB",
+            "clientVersion": "2.20240726.00.00",
+            "hl": "en",
+            "timeZone": "UTC",
+            "utcOffsetMinutes": 0,
+        },
+        "headers": {
+            "Content-Type": "application/json",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "X-YouTube-Client-Name": "1",
+            "X-YouTube-Client-Version": "2.20240726.00.00",
+            "Origin": "https://www.youtube.com",
+            "Referer": "https://www.youtube.com/",
+        },
+    },
 }
 
-_ANDROID_VR_UA = (
-    "com.google.android.apps.youtube.vr.oculus/1.60.19 "
-    "(Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip"
-)
-
-_INNERTUBE_HEADERS = {
-    "Content-Type": "application/json",
-    "User-Agent": _ANDROID_VR_UA,
-    "X-YouTube-Client-Name": "ANDROID_VR",
-    "X-YouTube-Client-Version": "1.60.19",
-    "Origin": "https://www.youtube.com",
-    "Referer": "https://www.youtube.com/",
-    "Accept-Language": "en-US,en;q=0.9",
-}
+# Client fallback order — most reliable first
+_CLIENT_ORDER = ["IOS", "ANDROID", "ANDROID_VR", "TVHTML5", "WEB"]
 
 
 # ─── Data Models ──────────────────────────────────────────────────────────────
+
 
 @dataclass
 class StreamInfo:
@@ -101,25 +204,80 @@ class VideoInfo:
         return [s for s in self.streams if s.stream_type == "audio"]
 
 
+# ─── Visitor Data (anti-bot bypass) ──────────────────────────────────────────
+
+_visitor_data_cache: str = ""
+
+def _get_visitor_data() -> str:
+    """
+    Fetch visitorData from YouTube homepage ytcfg.
+    This is a short-lived session token that tells YouTube we are a real browser session.
+    Cached per process run.
+    """
+    global _visitor_data_cache
+    if _visitor_data_cache:
+        return _visitor_data_cache
+
+    try:
+        req = urllib.request.Request(
+            "https://www.youtube.com/",
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+
+        # Extract from ytcfg.set({"VISITOR_DATA": "..."})
+        m = re.search(r'"VISITOR_DATA"\s*:\s*"([^"]+)"', html)
+        if m:
+            _visitor_data_cache = m.group(1)
+            return _visitor_data_cache
+
+        # Fallback: extract from visitorData key
+        m = re.search(r'"visitorData"\s*:\s*"([^"]+)"', html)
+        if m:
+            _visitor_data_cache = m.group(1)
+            return _visitor_data_cache
+    except Exception:
+        pass
+
+    return ""
+
+
 # ─── InnerTube API ────────────────────────────────────────────────────────────
 
-def _innertube_player(video_id: str) -> dict:
+def _innertube_player(video_id: str, client_name: str = "IOS") -> dict:
     """
-    Call InnerTube /youtubei/v1/player with ANDROID_VR client.
-    Returns the player response JSON (includes direct streaming URLs).
+    Call InnerTube /youtubei/v1/player with the specified client.
+    Returns the raw player response JSON.
     """
+    client_cfg = _CLIENTS[client_name]
+    _KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
+    url  = f"{_INNERTUBE_URL}?key={_KEY}&prettyPrint=false"
+
+    # Build context, injecting visitorData for bot-detection bypass
+    visitor_data = _get_visitor_data()
+    context: dict = {"client": dict(client_cfg["client"])}
+    if visitor_data:
+        context["client"]["visitorData"] = visitor_data
+
     payload = json.dumps({
         "videoId": video_id,
-        "context": {
-            "client": _ANDROID_VR_CLIENT,
-        },
+        "context": context,
     }).encode("utf-8")
 
-    req = urllib.request.Request(
-        _INNERTUBE_URL,
-        data=payload,
-        headers=_INNERTUBE_HEADERS,
-    )
+    headers = dict(client_cfg["headers"])
+    headers.setdefault("Accept-Language", "en-US,en;q=0.9")
+    if visitor_data:
+        headers["X-Goog-Visitor-Id"] = visitor_data
+
+    req = urllib.request.Request(url, data=payload, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return json.loads(resp.read().decode("utf-8"))
@@ -129,24 +287,32 @@ def _innertube_player(video_id: str) -> dict:
         raise RuntimeError(f"Network error: {e.reason}") from e
 
 
+
+
 # ─── Playability Check ────────────────────────────────────────────────────────
 
-def _check_playability(player_response: dict) -> None:
-    """Raise if video is not playable."""
+def _check_playability(player_response: dict) -> tuple[bool, str]:
+    """
+    Check if the player response indicates the video is playable.
+
+    Returns:
+        (is_ok, error_message) — is_ok=True if video is playable.
+    """
     status = player_response.get("playabilityStatus", {})
     reason = status.get("status", "")
     if reason == "OK":
-        return
+        return True, ""
 
-    message = status.get("reason") or status.get("messages", ["Unknown reason"])[0]
+    message = status.get("reason") or (status.get("messages", [""])[0])
     error_map = {
-        "LOGIN_REQUIRED": "Video requires login (age-restricted or private)",
-        "UNPLAYABLE": f"Video is unplayable: {message}",
-        "ERROR": f"Video error: {message}",
-        "LIVE_STREAM_OFFLINE": "Live stream is offline",
-        "CONTENT_CHECK_REQUIRED": "Content check required (age-restricted)",
+        "LOGIN_REQUIRED":      "age-restricted or login required",
+        "UNPLAYABLE":          f"unplayable: {message}",
+        "ERROR":               f"error: {message}",
+        "LIVE_STREAM_OFFLINE": "live stream is offline",
+        "CONTENT_CHECK_REQUIRED": "content check required (age-restricted)",
     }
-    raise RuntimeError(error_map.get(reason, f"Cannot play video ({reason}): {message}"))
+    err = error_map.get(reason, f"{reason}: {message}")
+    return False, err
 
 
 # ─── Stream Parsing ───────────────────────────────────────────────────────────
@@ -232,7 +398,12 @@ def get_video_info(url_or_id: str) -> VideoInfo:
     """
     Fetch video information and available streams from YouTube.
 
-    Uses InnerTube API with ANDROID_VR client for direct URLs (no cipher needed).
+    Tries multiple InnerTube clients in order (defined by _CLIENT_ORDER):
+    1. IOS          — direct URLs, rarely flagged by bot detection
+    2. ANDROID      — direct URLs, good bypass
+    3. ANDROID_VR   — direct URLs, may trigger bot check
+    4. TVHTML5      — bypasses age-restriction
+    5. WEB          — last resort (may need cipher)
 
     Args:
         url_or_id: YouTube URL or 11-character video ID.
@@ -242,7 +413,7 @@ def get_video_info(url_or_id: str) -> VideoInfo:
 
     Raises:
         ValueError: If URL/ID is invalid.
-        RuntimeError: If video cannot be fetched or is unavailable.
+        RuntimeError: If video cannot be fetched with any client.
     """
     video_id = extract_video_id(url_or_id)
     if not video_id:
@@ -252,33 +423,56 @@ def get_video_info(url_or_id: str) -> VideoInfo:
         )
 
     print(f"  -> Fetching video info: {video_id}")
-    player_response = _innertube_player(video_id)
-    _check_playability(player_response)
 
-    details = player_response.get("videoDetails", {})
-    title = details.get("title", "Unknown Title")
-    duration = int(details.get("lengthSeconds", 0))
-    channel = details.get("author", "Unknown Channel")
+    # Try clients in order until one returns playable streams
+    last_error = ""
 
-    # Best available thumbnail
-    thumbnails = details.get("thumbnail", {}).get("thumbnails", [])
-    thumbnail = thumbnails[-1]["url"] if thumbnails else ""
+    for client_name in _CLIENT_ORDER:
+        try:
+            player_response = _innertube_player(video_id, client_name)
+            is_ok, err = _check_playability(player_response)
+            if not is_ok:
+                last_error = err
+                print(f"  ! Client {client_name} blocked ({err}), trying next...")
+                continue
 
-    streams = _parse_streams(player_response)
-    if not streams:
-        raise RuntimeError(
-            "No downloadable streams found. "
-            "The video may be DRM-protected, private, or region-locked."
-        )
+            streams = _parse_streams(player_response)
+            if not streams:
+                last_error = "no streams in response"
+                print(f"  ! Client {client_name} returned no streams, trying next...")
+                continue
 
-    return VideoInfo(
-        video_id=video_id,
-        title=title,
-        duration_seconds=duration,
-        channel=channel,
-        thumbnail=thumbnail,
-        streams=streams,
+            # Success — log only if we fell back from primary
+            if client_name != _CLIENT_ORDER[0]:
+                print(f"  -> Used fallback client: {client_name}")
+
+            details   = player_response.get("videoDetails", {})
+            title     = details.get("title", "Unknown Title")
+            duration  = int(details.get("lengthSeconds", 0))
+            channel   = details.get("author", "Unknown Channel")
+            thumbnails= details.get("thumbnail", {}).get("thumbnails", [])
+            thumbnail = thumbnails[-1]["url"] if thumbnails else ""
+
+            return VideoInfo(
+                video_id=video_id,
+                title=title,
+                duration_seconds=duration,
+                channel=channel,
+                thumbnail=thumbnail,
+                streams=streams,
+            )
+
+        except RuntimeError as e:
+            last_error = str(e)
+            print(f"  ! Client {client_name} failed: {e}")
+            continue
+
+    raise RuntimeError(
+        f"Cannot download video {video_id}.\n"
+        f"Last error: {last_error}\n"
+        "The video may be private, DRM-protected, or region-locked."
     )
+
 
 
 def get_best_stream(

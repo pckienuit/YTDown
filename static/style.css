@@ -131,6 +131,37 @@ body {
 }
 .badge-green  { background: rgba(34,197,94,0.15); color: var(--green); border: 1px solid rgba(34,197,94,0.25); }
 .badge-yellow { background: rgba(245,158,11,0.15); color: var(--yellow); border: 1px solid rgba(245,158,11,0.25); }
+/* ── FFmpeg Notice ───────────────────────────────────────────── */
+.ffmpeg-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: rgba(245,158,11,0.1);
+  border: 1px solid rgba(245,158,11,0.25);
+  border-radius: var(--radius-sm);
+  margin-bottom: 14px;
+  font-size: 13px;
+  color: var(--text);
+  animation: slideUp 0.3s ease;
+}
+.fn-icon { font-size: 18px; flex-shrink: 0; }
+.fn-text  { flex: 1; line-height: 1.5; }
+.fn-text code {
+  background: rgba(0,0,0,0.3);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--yellow);
+  font-family: 'Consolas', monospace;
+}
+.fn-close {
+  background: none; border: none; cursor: pointer;
+  color: var(--text-muted); font-size: 16px;
+  padding: 2px 4px; flex-shrink: 0;
+}
+.fn-close:hover { color: var(--text); }
+
 .badge-dim    { background: var(--surface); color: var(--text-muted); border: 1px solid var(--border); }
 
 /* ── Glass Card ─────────────────────────────────────────────── */

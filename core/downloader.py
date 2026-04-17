@@ -296,13 +296,32 @@ def download_with_audio(
             return merge_video_audio(tmp_video, tmp_audio, output_path, remove_sources=True)
 
         elif audio_stream and not is_ffmpeg_available():
-            # No FFmpeg — download video only with a warning
-            print(
-                "\n  [!] FFmpeg not found — downloading video-only (no audio).\n"
-                "      Install FFmpeg for automatic audio merging.\n"
-                "      https://ffmpeg.org/download.html\n"
-            )
-            return download_stream(video_stream, video_info, output_dir)
+            # No FFmpeg + no muxed streams → download video + audio as separate files
+            # (User can merge manually or install FFmpeg for auto-merge)
+            muxed_streams = video_info.muxed_streams()
+            if muxed_streams:
+                # Lucky: a muxed stream exists
+                best_muxed = muxed_streams[0]
+                print(
+                    f"\n  [!] FFmpeg not found — using muxed stream ({best_muxed.quality}).\\n"
+                    f"      Install FFmpeg for {video_stream.quality}: winget install ffmpeg\\n"
+                )
+                return download_stream(best_muxed, video_info, output_dir)
+            else:
+                # Download video + audio separately, inform user clearly
+                print(
+                    "\n  [!] FFmpeg not found — saving video and audio as separate files.\n"
+                    "      Merge tip: winget install ffmpeg  (then re-download for auto-merge)\n"
+                )
+                video_path = download_stream(video_stream, video_info, output_dir)
+                audio_out  = os.path.join(output_dir, f"{base_name}.audio.{audio_stream.ext}")
+                counter = 1
+                while os.path.exists(audio_out):
+                    audio_out = os.path.join(output_dir, f"{base_name}.audio ({counter}).{audio_stream.ext}")
+                    counter += 1
+                download_url(audio_stream.url, audio_out, _labeled_progress("Audio"))
+                print(f"\n  -> Audio saved: {os.path.basename(audio_out)}")
+                return video_path
 
         else:
             # No audio stream available at all

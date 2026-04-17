@@ -46,13 +46,16 @@ async function checkStatus() {
   try {
     const res  = await fetch('/api/status');
     const data = await res.json();
-    const badge = $('ffmpegBadge');
+    const badge  = $('ffmpegBadge');
+    const notice = $('ffmpegNotice');
     if (data.ffmpeg?.available) {
       badge.textContent  = `FFmpeg ${data.ffmpeg.version}`;
       badge.className    = 'badge badge-green';
+      notice.classList.add('hidden');
     } else {
       badge.textContent  = 'FFmpeg: not found';
       badge.className    = 'badge badge-yellow';
+      notice.classList.remove('hidden');
     }
   } catch (_) {
     $('ffmpegBadge').textContent = 'Server error';

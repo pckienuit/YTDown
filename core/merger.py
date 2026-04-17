@@ -35,12 +35,29 @@ def find_ffmpeg() -> Optional[str]:
         return found
 
     # Common manual installation paths on Windows
+    local_app   = os.environ.get("LOCALAPPDATA", "")
+    app_data    = os.environ.get("APPDATA", "")
+    user_home   = os.path.expanduser("~")
     windows_paths = [
+        # Manual install
         r"C:\ffmpeg\bin\ffmpeg.exe",
         r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
         r"C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe",
-        os.path.join(os.environ.get("LOCALAPPDATA", ""), "ffmpeg", "bin", "ffmpeg.exe"),
-        os.path.join(os.environ.get("APPDATA", ""), "ffmpeg", "bin", "ffmpeg.exe"),
+        # Scoop
+        os.path.join(user_home, "scoop", "shims", "ffmpeg.exe"),
+        os.path.join(user_home, "scoop", "apps", "ffmpeg", "current", "bin", "ffmpeg.exe"),
+        # Chocolatey
+        r"C:\ProgramData\chocolatey\bin\ffmpeg.exe",
+        r"C:\tools\ffmpeg\bin\ffmpeg.exe",
+        # LocalAppData / AppData
+        os.path.join(local_app, "ffmpeg", "bin", "ffmpeg.exe"),
+        os.path.join(app_data, "ffmpeg", "bin", "ffmpeg.exe"),
+        # Downloads or Desktop (manual unzip)
+        os.path.join(user_home, "Downloads", "ffmpeg", "bin", "ffmpeg.exe"),
+        os.path.join(user_home, "ffmpeg", "bin", "ffmpeg.exe"),
+        # winget default path
+        r"C:\Program Files\FFmpeg\bin\ffmpeg.exe",
+        r"C:\Program Files\FFmpeg for Audacity\bin\ffmpeg.exe",
     ]
     # Common paths on Linux/macOS
     unix_paths = [
@@ -49,6 +66,20 @@ def find_ffmpeg() -> Optional[str]:
         "/opt/homebrew/bin/ffmpeg",
         "/opt/local/bin/ffmpeg",
     ]
+
+    if sys.platform == "win32":
+        # WinGet install path (Gyan.FFmpeg) — PATH not updated until shell restart
+        winget_base = os.path.join(local_app, "Microsoft", "WinGet", "Packages")
+        if os.path.isdir(winget_base):
+            for pkg_dir in os.listdir(winget_base):
+                if pkg_dir.startswith("Gyan.FFmpeg"):
+                    candidate = os.path.join(winget_base, pkg_dir)
+                    # Walk one level deeper to find bin/ffmpeg.exe
+                    for sub in os.listdir(candidate):
+                        fp = os.path.join(candidate, sub, "bin", "ffmpeg.exe")
+                        if os.path.isfile(fp):
+                            _ffmpeg_path_cache = fp
+                            return fp
 
     for path in (windows_paths if sys.platform == "win32" else unix_paths):
         if os.path.isfile(path):

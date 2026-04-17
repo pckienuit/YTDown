@@ -27,6 +27,17 @@
     <div id="ffmpegBadge" class="badge badge-dim">FFmpeg checking...</div>
   </header>
 
+  <!-- ── FFmpeg Notice ────────────────────────────────────────── -->
+  <div id="ffmpegNotice" class="ffmpeg-notice hidden">
+    <span class="fn-icon">⚠</span>
+    <div class="fn-text">
+      <strong>FFmpeg not found</strong> — Downloads will use muxed streams (max ~720p with audio).
+      Install FFmpeg for 1080p/4K support:
+      <code>winget install ffmpeg</code>
+    </div>
+    <button class="fn-close" onclick="this.parentElement.classList.add('hidden')">✕</button>
+  </div>
+
   <!-- ── Main Card ─────────────────────────────────────────── -->
   <main class="main">
 
