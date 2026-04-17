@@ -262,15 +262,17 @@ body {
 .btn-download {
   width: 100%;
   justify-content: center;
-  padding: 15px 24px;
+  padding: 12px 24px;
   border-radius: var(--radius);
   background: linear-gradient(135deg, var(--accent) 0%, var(--purple) 100%);
   color: #fff;
-  font-size: 15px;
-  box-shadow: 0 4px 24px var(--accent-glow);
-  margin-top: 20px;
+  font-size: 14px;
+  box-shadow: 0 4px 20px var(--accent-glow);
 }
-.btn-download:hover { transform: translateY(-2px); box-shadow: 0 8px 32px var(--accent-glow); }
+.card .btn-download { margin-top: 20px; }
+.done-actions .btn-download { margin-top: 0; }
+
+.btn-download:hover { transform: translateY(-2px); box-shadow: 0 6px 24px var(--accent-glow); }
 .btn-download:active { transform: translateY(0); }
 
 .btn-secondary {
@@ -279,8 +281,9 @@ body {
   background: var(--surface-hov);
   color: var(--text);
   border: 1px solid var(--border);
+  justify-content: center;
 }
-.btn-secondary:hover { border-color: var(--border-hov); }
+.btn-secondary:hover { border-color: var(--border-hov); background: rgba(255,255,255,0.08); }
 
 .btn-icon { font-size: 16px; }
 
@@ -560,8 +563,8 @@ body {
   word-break: break-all;
   margin-bottom: 20px;
 }
-.done-actions { display: flex; gap: 12px; flex-wrap: wrap; }
-.done-actions .btn { flex: 1; min-width: 140px; }
+.done-actions { display: flex; gap: 12px; flex-wrap: wrap; align-items: stretch; }
+.done-actions .btn { flex: 1; min-width: 140px; height: 48px; }
 
 /* ── Error Section ───────────────────────────────────────────── */
 .error-icon {
