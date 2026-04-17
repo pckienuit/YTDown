@@ -524,7 +524,7 @@ class YTDownHandler(BaseHTTPRequestHandler):
 
 # ─── Entry Point ──────────────────────────────────────────────────────────────
 
-DEFAULT_HOST = "localhost"
+DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8080
 
 
