@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YTDown — YouTube Downloader</title>
+  <meta name="description" content="Download YouTube videos in any quality — no third-party libraries, runs locally." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<!-- Background orbs -->
+<div class="bg-orb orb-1"></div>
+<div class="bg-orb orb-2"></div>
+<div class="bg-orb orb-3"></div>
+
+<div class="app">
+
+  <!-- ── Header ───────────────────────────────────────────── -->
+  <header class="header">
+    <div class="logo">
+      <span class="logo-icon">▶</span>
+      <span class="logo-text">YT<span class="logo-accent">Down</span></span>
+    </div>
+    <div id="ffmpegBadge" class="badge badge-dim">FFmpeg checking...</div>
+  </header>
+
+  <!-- ── Main Card ─────────────────────────────────────────── -->
+  <main class="main">
+
+    <!-- URL Input Section -->
+    <section class="card" id="inputSection">
+      <h1 class="card-title">Download YouTube Videos</h1>
+      <p class="card-sub">Paste a YouTube URL below to get started</p>
+
+      <div class="input-group">
+        <span class="input-icon">🔗</span>
+        <input
+          type="text"
+          id="urlInput"
+          class="url-input"
+          placeholder="https://youtube.com/watch?v=..."
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button id="fetchBtn" class="btn btn-fetch" onclick="fetchInfo()">
+          <span id="fetchBtnText">Fetch</span>
+          <span id="fetchSpinner" class="spinner hidden"></span>
+        </button>
+      </div>
+      <p id="inputError" class="error-msg hidden"></p>
+    </section>
+
+    <!-- Video Preview Section -->
+    <section class="card hidden" id="videoSection">
+      <div class="video-preview">
+        <div class="thumbnail-wrap">
+          <img id="thumbnail" class="thumbnail" src="" alt="Thumbnail" />
+          <span id="durationBadge" class="duration-badge"></span>
+        </div>
+        <div class="video-meta">
+          <h2 id="videoTitle" class="video-title"></h2>
+          <p id="videoChannel" class="video-channel"></p>
+          <div id="streamCounts" class="stream-counts"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Quality Selector Section -->
+    <section class="card hidden" id="qualitySection">
+      <div class="section-header">
+        <h3 class="section-title">Select Quality</h3>
+        <label class="toggle-wrap">
+          <input type="checkbox" id="audioOnlyToggle" onchange="onAudioOnlyChange()" />
+          <span class="toggle-slider"></span>
+          <span class="toggle-label">Audio only</span>
+        </label>
+      </div>
+
+      <!-- Audio format selector (shown when audio-only) -->
+      <div id="audioFormatRow" class="audio-format-row hidden">
+        <span class="af-label">Format:</span>
+        <label class="af-option"><input type="radio" name="af" value="mp3" checked /> MP3</label>
+        <label class="af-option"><input type="radio" name="af" value="m4a" /> M4A (no FFmpeg needed)</label>
+      </div>
+
+      <div id="qualityGrid" class="quality-grid"></div>
+
+      <div id="noStreams" class="no-streams hidden">No streams available.</div>
+
+      <button id="downloadBtn" class="btn btn-download hidden" onclick="startDownload()">
+        <span class="btn-icon">⬇</span>
+        <span id="downloadBtnText">Download</span>
+      </button>
+    </section>
+
+    <!-- Progress Section -->
+    <section class="card hidden" id="progressSection">
+      <h3 class="section-title">Downloading</h3>
+      <p id="progressTitle" class="progress-title"></p>
+      <p id="progressStep" class="progress-step"></p>
+
+      <div class="progress-bar-wrap">
+        <div class="progress-bar-bg">
+          <div id="progressBar" class="progress-bar" style="width:0%"></div>
+        </div>
+        <span id="progressPct" class="progress-pct">0%</span>
+      </div>
+
+      <div class="progress-stats">
+        <span id="progressDl"></span>
+        <span id="progressSpeed"></span>
+        <span id="progressEta"></span>
+      </div>
+    </section>
+
+    <!-- Done Section -->
+    <section class="card hidden" id="doneSection">
+      <div class="done-icon">✓</div>
+      <h3 class="done-title">Download Complete!</h3>
+      <p id="doneFilename" class="done-filename"></p>
+      <div class="done-actions">
+        <a id="doneDownloadLink" class="btn btn-download" href="#" target="_blank">⬇ Save to disk</a>
+        <button class="btn btn-secondary" onclick="resetUI()">Download another</button>
+      </div>
+    </section>
+
+    <!-- Error Section -->
+    <section class="card hidden" id="errorSection">
+      <div class="error-icon">✗</div>
+      <h3 class="error-title">Download Failed</h3>
+      <p id="errorMsg" class="error-detail"></p>
+      <button class="btn btn-secondary" onclick="resetToQuality()">Try again</button>
+    </section>
+
+  </main>
+
+  <!-- ── History ────────────────────────────────────────────── -->
+  <section class="history-section" id="historySection">
+    <h3 class="history-title">Recent Downloads</h3>
+    <div id="historyList" class="history-list"></div>
+  </section>
+
+</div><!-- .app -->
+
+<script src="/static/app.js"></script>
+</body>
+</html>
