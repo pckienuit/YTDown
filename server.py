@@ -1,14 +1,17 @@
 """
-YTDown Web Server — Phase 3
+YTDown Web Server — Phase 4: Playlist Support
 
 Built-in HTTP server with:
-  GET  /                    → index.html
-  GET  /static/*            → CSS/JS assets
-  POST /api/info            → fetch video info JSON
-  POST /api/download        → start download, return job id
-  GET  /api/progress/<id>   → SSE stream with progress events
-  GET  /api/jobs            → list active/completed jobs
-  GET  /downloads/<file>    → serve downloaded file
+  GET  /                       → index.html
+  GET  /static/*               → CSS/JS assets
+  POST /api/info               → fetch single video info JSON
+  POST /api/playlist-info      → fetch playlist metadata + entry list
+  POST /api/download           → start single download, return job_id
+  POST /api/playlist-download  → start batch playlist download
+  GET  /api/progress/<id>      → SSE stream with progress events
+  GET  /api/jobs               → list active/completed jobs
+  GET  /api/status             → server/ffmpeg status
+  GET  /downloads/<file>       → serve downloaded file
 """
 
 import io
@@ -33,6 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core.downloader import download_url, download_with_audio
 from core.extractor import StreamInfo, VideoInfo, get_best_stream, get_video_info
 from core.merger import get_ffmpeg_version, is_ffmpeg_available
+from core.playlist import PlaylistInfo, PlaylistEntry, get_playlist_info, is_playlist_url
 from core.utils import ensure_dir, format_bytes, sanitize_filename
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
@@ -47,19 +51,23 @@ ensure_dir(DOWNLOAD_DIR)
 class DownloadJob:
     """Tracks the state of a single download job."""
 
-    def __init__(self, job_id: str, video_id: str, title: str, quality: str, audio_only: bool):
-        self.job_id     = job_id
-        self.video_id   = video_id
-        self.title      = title
-        self.quality    = quality
-        self.audio_only = audio_only
+    def __init__(self, job_id: str, video_id: str, title: str, quality: str, audio_only: bool,
+                 playlist_id: str = "", playlist_index: int = 0, playlist_total: int = 0):
+        self.job_id         = job_id
+        self.video_id       = video_id
+        self.title          = title
+        self.quality        = quality
+        self.audio_only     = audio_only
+        self.playlist_id    = playlist_id      # non-empty = part of a batch
+        self.playlist_index = playlist_index
+        self.playlist_total = playlist_total
 
-        self.status: str            = "pending"   # pending|running|done|error
-        self.step: str              = ""          # current step label
+        self.status: str            = "pending"
+        self.step: str              = ""
         self.downloaded: int        = 0
         self.total: int             = 0
         self.speed: float           = 0.0
-        self.progress: float        = 0.0         # 0-100
+        self.progress: float        = 0.0
         self.output_file: str       = ""
         self.error: str             = ""
         self.created_at: float      = time.time()
@@ -78,20 +86,23 @@ class DownloadJob:
 
     def to_dict(self) -> dict:
         return {
-            "job_id":       self.job_id,
-            "video_id":     self.video_id,
-            "title":        self.title,
-            "quality":      self.quality,
-            "audio_only":   self.audio_only,
-            "status":       self.status,
-            "step":         self.step,
-            "downloaded":   self.downloaded,
-            "total":        self.total,
-            "speed":        round(self.speed),
-            "progress":     round(self.progress, 1),
-            "output_file":  os.path.basename(self.output_file) if self.output_file else "",
-            "error":        self.error,
-            "created_at":   self.created_at,
+            "job_id":           self.job_id,
+            "video_id":         self.video_id,
+            "title":            self.title,
+            "quality":          self.quality,
+            "audio_only":       self.audio_only,
+            "playlist_id":      self.playlist_id,
+            "playlist_index":   self.playlist_index,
+            "playlist_total":   self.playlist_total,
+            "status":           self.status,
+            "step":             self.step,
+            "downloaded":       self.downloaded,
+            "total":            self.total,
+            "speed":            round(self.speed),
+            "progress":         round(self.progress, 1),
+            "output_file":      os.path.basename(self.output_file) if self.output_file else "",
+            "error":            self.error,
+            "created_at":       self.created_at,
         }
 
 
@@ -99,9 +110,12 @@ _jobs: dict[str, DownloadJob] = {}
 _jobs_lock = threading.Lock()
 
 
-def _create_job(video_id: str, title: str, quality: str, audio_only: bool) -> DownloadJob:
+def _create_job(video_id: str, title: str, quality: str, audio_only: bool,
+                playlist_id: str = "", playlist_index: int = 0,
+                playlist_total: int = 0) -> DownloadJob:
     job_id = str(uuid.uuid4())
-    job = DownloadJob(job_id, video_id, title, quality, audio_only)
+    job = DownloadJob(job_id, video_id, title, quality, audio_only,
+                      playlist_id, playlist_index, playlist_total)
     with _jobs_lock:
         _jobs[job_id] = job
     return job
@@ -244,6 +258,10 @@ class YTDownHandler(BaseHTTPRequestHandler):
             self._handle_info()
         elif path == "/api/download":
             self._handle_download()
+        elif path == "/api/playlist-info":
+            self._handle_playlist_info()
+        elif path == "/api/playlist-download":
+            self._handle_playlist_download()
         else:
             _send_error(self, "Not found", 404)
 
@@ -387,6 +405,102 @@ class YTDownHandler(BaseHTTPRequestHandler):
         jobs.sort(key=lambda j: j["created_at"], reverse=True)
         _send_json(self, {"jobs": jobs[:50]})
 
+    def _handle_playlist_info(self):
+        """Return playlist metadata + first 200 entries."""
+        try:
+            body = _read_json_body(self)
+            url  = body.get("url", "").strip()
+            if not url:
+                return _send_error(self, "Missing 'url' field")
+            if not is_playlist_url(url):
+                return _send_error(self, "URL does not contain a playlist ID (list= param)")
+
+            playlist = get_playlist_info(url)
+            entries  = [
+                {
+                    "video_id":  e.video_id,
+                    "title":     e.title,
+                    "duration":  e.duration,
+                    "thumbnail": e.thumbnail,
+                    "channel":   e.channel,
+                    "index":     e.index,
+                }
+                for e in playlist.entries
+            ]
+            _send_json(self, {
+                "playlist_id": playlist.playlist_id,
+                "title":       playlist.title,
+                "channel":     playlist.channel,
+                "video_count": playlist.video_count,
+                "thumbnail":   playlist.thumbnail,
+                "url":         playlist.url,
+                "entries":     entries,
+            })
+        except Exception as e:
+            _send_error(self, str(e))
+
+    def _handle_playlist_download(self):
+        """Start a batch download for selected playlist entries."""
+        try:
+            body         = _read_json_body(self)
+            video_ids    = body.get("video_ids", [])   # list of video IDs to download
+            playlist_id  = body.get("playlist_id", "")
+            quality      = body.get("quality", "best")
+            audio_only   = body.get("audio_only", False)
+            audio_format = body.get("audio_format", "m4a")
+
+            if not video_ids:
+                return _send_error(self, "No video_ids provided")
+
+            total    = len(video_ids)
+            job_ids  = []
+
+            # Create a placeholder job per video
+            for idx, vid in enumerate(video_ids, 1):
+                job = _create_job(
+                    video_id      = vid,
+                    title         = f"Video {idx}/{total}",  # Updated when fetched
+                    quality       = quality,
+                    audio_only    = audio_only,
+                    playlist_id   = playlist_id,
+                    playlist_index= idx,
+                    playlist_total= total,
+                )
+                job_ids.append(job.job_id)
+
+            # One background thread runs all downloads sequentially
+            def _batch_worker():
+                for job_id, vid in zip(job_ids, video_ids):
+                    job = _get_job(job_id)
+                    if not job:
+                        continue
+                    try:
+                        info = get_video_info(vid)
+                        job.title    = info.title
+                        job.video_id = info.video_id
+
+                        if audio_only:
+                            stream = info.audio_streams()[0] if info.audio_streams() else None
+                            if not stream:
+                                raise RuntimeError("No audio stream")
+                        else:
+                            stream = get_best_stream(info, quality=quality, prefer_mp4=True)
+                            job.quality = stream.quality
+
+                        _run_download(job, info, stream, audio_only, audio_format)
+                    except Exception as e:
+                        job.status = "error"
+                        job.error  = str(e)
+                        job.push_event({"type": "error", "message": str(e)})
+
+            t = threading.Thread(target=_batch_worker, daemon=True)
+            t.start()
+
+            _send_json(self, {"job_ids": job_ids, "total": total})
+
+        except Exception as e:
+            _send_error(self, str(e))
+
     def _serve_file(self, path: str, download: bool = False):
         if not os.path.isfile(path):
             return _send_error(self, f"File not found: {os.path.basename(path)}", 404)
@@ -423,7 +537,8 @@ def run_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
 
     print(f"""
   +=========================================+
-  |   YTDown Web Server — Phase 3          |
+  |   YTDown Web Server — Phase 4          |
+  |   Playlist Support                     |
   +=========================================+
 
   Listening : http://{host}:{port}

@@ -5,10 +5,15 @@
 // ── State ─────────────────────────────────────────────────────
 
 const state = {
-  videoInfo:       null,   // full info from /api/info
-  selectedQuality: null,   // { quality, audio_only }
-  activeJobId:     null,
-  progressSource:  null,   // EventSource
+  videoInfo:         null,
+  selectedQuality:   null,
+  activeJobId:       null,
+  progressSource:    null,
+
+  // Playlist
+  playlistInfo:      null,   // { playlist_id, title, entries, … }
+  selectedVideoIds:  new Set(),
+  batchJobIds:       [],
 };
 
 // ── DOM shortcuts ─────────────────────────────────────────────
@@ -63,32 +68,156 @@ async function fetchInfo() {
 
   setFetchLoading(true);
   hide('inputError');
+  hide('playlistSection');
   hide('videoSection');
   hide('qualitySection');
   hide('progressSection');
   hide('doneSection');
   hide('errorSection');
+  state.playlistInfo = null;
+  state.videoInfo    = null;
 
   try {
-    const res  = await fetch('/api/info', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url }),
-    });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-
-    state.videoInfo = data;
-    renderVideoPreview(data);
-    renderQualityGrid(data);
-    show('videoSection');
-    show('qualitySection');
+    // Auto-detect playlist URL
+    if (url.includes('list=')) {
+      const res  = await fetch('/api/playlist-info', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      state.playlistInfo = data;
+      renderPlaylist(data);
+      show('playlistSection');
+    } else {
+      const res  = await fetch('/api/info', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      state.videoInfo = data;
+      renderVideoPreview(data);
+      renderQualityGrid(data);
+      show('videoSection');
+      show('qualitySection');
+    }
   } catch (err) {
     showInputError(err.message);
   } finally {
     setFetchLoading(false);
   }
 }
+
+// ── Playlist rendering ────────────────────────────────────────
+
+function renderPlaylist(playlist) {
+  $('playlistTitle').textContent   = playlist.title || 'Untitled Playlist';
+  $('playlistChannel').textContent = playlist.channel || '';
+  $('playlistCount').textContent   = `${playlist.video_count} videos`;
+
+  state.selectedVideoIds = new Set(playlist.entries.map(e => e.video_id));
+
+  const container = $('playlistEntries');
+  container.innerHTML = playlist.entries.map(e => {
+    const dur = e.duration ? formatTime(e.duration) : '?';
+    return `
+      <div class="pl-entry checked" id="ple-${e.video_id}" onclick="togglePlaylistEntry('${e.video_id}')">
+        <span class="pl-check">✓</span>
+        <img class="pl-thumb" src="${escHtml(e.thumbnail)}" alt="" loading="lazy" />
+        <div class="pl-info">
+          <div class="pl-title">${escHtml(e.title)}</div>
+          <div class="pl-dur">${dur}</div>
+        </div>
+        <span class="pl-idx">${e.index}</span>
+      </div>
+    `;
+  }).join('');
+
+  updateSelectedCount();
+  show('plDownloadBtn');
+}
+
+function togglePlaylistEntry(videoId) {
+  if (state.selectedVideoIds.has(videoId)) {
+    state.selectedVideoIds.delete(videoId);
+    $(`ple-${videoId}`)?.classList.remove('checked');
+  } else {
+    state.selectedVideoIds.add(videoId);
+    $(`ple-${videoId}`)?.classList.add('checked');
+  }
+  updateSelectedCount();
+}
+
+function selectAllPlaylist(select) {
+  if (!state.playlistInfo) return;
+  state.playlistInfo.entries.forEach(e => {
+    if (select) state.selectedVideoIds.add(e.video_id);
+    else state.selectedVideoIds.delete(e.video_id);
+    $(`ple-${e.video_id}`)?.classList.toggle('checked', select);
+  });
+  updateSelectedCount();
+}
+
+function updateSelectedCount() {
+  const n = state.selectedVideoIds.size;
+  $('selectedCount').textContent = `${n} selected`;
+  $('plDownloadBtnText').textContent = n
+    ? `Download ${n} video${n > 1 ? 's' : ''}`
+    : 'Download Selected';
+  $('plDownloadBtn').classList.toggle('hidden', n === 0);
+}
+
+function onPlAudioChange() {
+  const on = $('plAudioToggle').checked;
+  $('plAudioFormatRow').classList.toggle('hidden', !on);
+  $('plQualityRow').classList.toggle('hidden', on);
+}
+
+async function startPlaylistDownload() {
+  if (!state.playlistInfo || state.selectedVideoIds.size === 0) return;
+
+  const quality     = $('plAudioToggle').checked ? 'best' : ($('plQualitySelect').value || 'best');
+  const audio_only  = $('plAudioToggle').checked;
+  const audio_format= document.querySelector('input[name="plaf"]:checked')?.value || 'm4a';
+
+  try {
+    const res = await fetch('/api/playlist-download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        video_ids:    [...state.selectedVideoIds],
+        playlist_id:  state.playlistInfo.playlist_id,
+        quality,
+        audio_only,
+        audio_format,
+      }),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    state.batchJobIds = data.job_ids || [];
+    // Show feedback in history pane
+    hide('playlistSection');
+    showPlaylistQueued(data.total);
+    refreshHistory();
+  } catch (err) {
+    alert('Failed to start download: ' + err.message);
+  }
+}
+
+function showPlaylistQueued(total) {
+  hide('doneSection');
+  hide('errorSection');
+  // Show a simple progress card
+  show('progressSection');
+  $('progressTitle').textContent = state.playlistInfo?.title || 'Playlist';
+  $('progressStep').textContent  = `Queued ${total} video${total > 1 ? 's' : ''} — see history below`;
+  setProgress(0);
+}
+
+
 
 function setFetchLoading(on) {
   $('fetchBtn').disabled   = on;
@@ -378,21 +507,26 @@ function renderHistory(jobs) {
   }
   $('historySection').classList.remove('hidden');
 
-  list.innerHTML = jobs.slice(0, 10).map(j => {
+  list.innerHTML = jobs.slice(0, 20).map(j => {
     const isDone    = j.status === 'done';
     const isRunning = j.status === 'running' || j.status === 'pending';
     const isError   = j.status === 'error';
 
-    const dlLink = isDone
+    const dlLink = isDone && j.output_file
       ? `<a class="hi-dl-link" href="/downloads/${encodeURIComponent(j.output_file)}" title="Save to disk">⬇</a>`
       : isRunning
         ? `<span style="font-size:12px;color:var(--text-dim)">${Math.round(j.progress)}%</span>`
         : '';
 
+    // Playlist batch label
+    const plLabel = j.playlist_total > 0
+      ? `<span style="font-size:10px;color:var(--purple);font-weight:600">[${j.playlist_index}/${j.playlist_total}]</span> `
+      : '';
+
     return `
       <div class="history-item">
         <span class="hi-status ${j.status}"></span>
-        <span class="hi-title" title="${escHtml(j.title)}">${escHtml(j.title)}</span>
+        <span class="hi-title" title="${escHtml(j.title)}">${plLabel}${escHtml(j.title)}</span>
         <span class="hi-quality">${j.quality}${j.audio_only ? ' 🎵' : ''}</span>
         ${dlLink}
       </div>

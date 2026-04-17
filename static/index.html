@@ -53,6 +53,57 @@
       <p id="inputError" class="error-msg hidden"></p>
     </section>
 
+    <!-- Playlist Preview Section -->
+    <section class="card hidden" id="playlistSection">
+      <div class="playlist-header">
+        <div class="playlist-meta">
+          <div class="playlist-badge">PLAYLIST</div>
+          <h2 id="playlistTitle" class="playlist-title"></h2>
+          <p id="playlistChannel" class="playlist-channel"></p>
+          <p id="playlistCount" class="playlist-count"></p>
+        </div>
+      </div>
+
+      <div class="playlist-controls">
+        <button class="btn-text" onclick="selectAllPlaylist(true)">Select all</button>
+        <button class="btn-text" onclick="selectAllPlaylist(false)">Deselect all</button>
+        <span id="selectedCount" class="selected-count">0 selected</span>
+        <div style="flex:1"></div>
+        <label class="toggle-wrap" style="margin:0">
+          <input type="checkbox" id="plAudioToggle" onchange="onPlAudioChange()" />
+          <span class="toggle-slider"></span>
+          <span class="toggle-label">Audio only</span>
+        </label>
+      </div>
+
+      <!-- Audio format (playlist) -->
+      <div id="plAudioFormatRow" class="audio-format-row hidden" style="margin-bottom:12px">
+        <span class="af-label">Format:</span>
+        <label class="af-option"><input type="radio" name="plaf" value="mp3" checked /> MP3</label>
+        <label class="af-option"><input type="radio" name="plaf" value="m4a" /> M4A</label>
+      </div>
+
+      <!-- Quality for playlist -->
+      <div id="plQualityRow" class="pl-quality-row">
+        <span class="pq-label">Quality:</span>
+        <select id="plQualitySelect" class="pq-select">
+          <option value="best">Best available</option>
+          <option value="1080p">1080p</option>
+          <option value="720p">720p</option>
+          <option value="480p">480p</option>
+          <option value="360p">360p</option>
+          <option value="240p">240p</option>
+        </select>
+      </div>
+
+      <div id="playlistEntries" class="playlist-entries"></div>
+
+      <button id="plDownloadBtn" class="btn btn-download hidden" onclick="startPlaylistDownload()">
+        <span class="btn-icon">⬇</span>
+        <span id="plDownloadBtnText">Download Selected</span>
+      </button>
+    </section>
+
     <!-- Video Preview Section -->
     <section class="card hidden" id="videoSection">
       <div class="video-preview">

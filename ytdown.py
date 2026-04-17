@@ -2,16 +2,17 @@
 # -*- coding: utf-8 -*-
 """
 YTDown - YouTube Video Downloader CLI
-Phase 2: FFmpeg merge + audio extraction
+Phase 4: Playlist support
 
 Usage:
-    python ytdown.py <URL>
-    python ytdown.py <URL> --list
-    python ytdown.py <URL> --info
-    python ytdown.py <URL> -q 1080p          # Auto-merge with FFmpeg
-    python ytdown.py <URL> -a                # Audio only (MP3)
-    python ytdown.py <URL> -a --af m4a       # Audio only (native m4a)
-    python ytdown.py <URL> -q 720p -o ./dir
+    python ytdown.py <VIDEO_URL>               Download single video
+    python ytdown.py <PLAYLIST_URL>            Download all playlist videos
+    python ytdown.py <PLAYLIST_URL> --range 1-10  Download videos 1-10
+    python ytdown.py <URL> --list             Show available streams
+    python ytdown.py <URL> --info             Show info only
+    python ytdown.py <URL> -q 1080p           Download 1080p (FFmpeg merge)
+    python ytdown.py <URL> -a                 Audio only (MP3)
+    python ytdown.py <URL> -a --af m4a        Audio only M4A (no FFmpeg)
 """
 
 import argparse
@@ -29,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core.downloader import download_with_audio, download_stream
 from core.extractor import VideoInfo, get_best_stream, get_video_info
 from core.merger import find_ffmpeg, get_ffmpeg_version, is_ffmpeg_available
+from core.playlist import PlaylistInfo, get_playlist_info, is_playlist_url
 from core.utils import format_bytes, format_duration
 
 
@@ -189,7 +191,96 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="FORMAT",
         help="Audio format when -a is used: mp3 | m4a | copy (default: mp3)",
     )
+    p.add_argument(
+        "--range",
+        metavar="N-M",
+        help="For playlists: download only videos N through M (e.g. 1-10)",
+    )
+    p.add_argument(
+        "--concurrent",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Playlist: number of concurrent downloads (default: 1)",
+    )
     return p
+
+
+# ─── Playlist Helpers ─────────────────────────────────────────────────────────
+
+def _parse_range(range_str: str, total: int) -> tuple[int, int]:
+    """Parse '1-10' range string → (start_index_0based, end_index_exclusive)."""
+    try:
+        parts = range_str.split("-")
+        start = max(1, int(parts[0]))
+        end   = min(total, int(parts[1])) if len(parts) > 1 else total
+        return start - 1, end  # convert to 0-based slice
+    except (ValueError, IndexError):
+        raise ValueError(f"Invalid range '{range_str}'. Use format: 1-10")
+
+
+def _download_playlist(playlist: PlaylistInfo, args) -> None:
+    """Download all (or a range of) videos in a playlist."""
+    entries = playlist.entries
+
+    # Apply range filter
+    start_idx, end_idx = 0, len(entries)
+    if args.range:
+        start_idx, end_idx = _parse_range(args.range, len(entries))
+    entries = entries[start_idx:end_idx]
+
+    if not entries:
+        print(f"  {C.YELLOW}No videos in the selected range.{C.RESET}")
+        return
+
+    total     = len(entries)
+    succeeded = 0
+    failed    = []
+
+    print(f"  {C.BOLD}Playlist: {playlist.title}{C.RESET}")
+    print(f"  {C.DIM}Channel: {playlist.channel}  |  Downloading {total} video(s){C.RESET}\n")
+    _divider()
+
+    for i, entry in enumerate(entries, 1):
+        print(f"\n  {C.CYAN}[{i}/{total}] {entry.title}{C.RESET}")
+        try:
+            video_info = get_video_info(entry.video_id)
+
+            if args.audio:
+                stream = video_info.audio_streams()[0] if video_info.audio_streams() else None
+                if not stream:
+                    raise RuntimeError("No audio stream")
+                download_with_audio(
+                    video_stream=stream,
+                    video_info=video_info,
+                    output_dir=args.output,
+                    audio_only=True,
+                    audio_format=args.audio_format,
+                )
+            else:
+                stream = get_best_stream(video_info, quality=args.quality, prefer_mp4=True)
+                download_with_audio(
+                    video_stream=stream,
+                    video_info=video_info,
+                    output_dir=args.output,
+                )
+            succeeded += 1
+            print(f"  {C.GREEN}[{i}/{total}] Done{C.RESET}")
+
+        except KeyboardInterrupt:
+            print(f"\n  {C.YELLOW}[!] Cancelled at video {i}/{total}.{C.RESET}\n")
+            break
+        except Exception as e:
+            failed.append((entry.title, str(e)))
+            print(f"  {C.RED}[!] Skipped: {e}{C.RESET}")
+
+    _divider()
+    print(f"\n  {C.GREEN}{C.BOLD}Playlist complete: {succeeded}/{total} downloaded{C.RESET}")
+    if failed:
+        print(f"  {C.YELLOW}Failed ({len(failed)}):{C.RESET}")
+        for title, err in failed:
+            print(f"    - {title[:60]}: {err}")
+    print()
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -203,6 +294,28 @@ def main():
     args = parser.parse_args()
 
     try:
+        # ── Playlist mode ───────────────────────────────────────────────────
+        if is_playlist_url(args.url):
+            print(f"  {C.CYAN}Playlist URL detected — fetching playlist info...{C.RESET}")
+            playlist = get_playlist_info(args.url)
+
+            if args.info:
+                print(f"\n  {C.BOLD}Playlist: {playlist.title}{C.RESET}")
+                print(f"  {C.DIM}Channel: {playlist.channel}  |  Videos: {playlist.video_count}{C.RESET}\n")
+                _divider()
+                for e in playlist.entries[:20]:
+                    from core.utils import format_duration
+                    dur = format_duration(e.duration) if e.duration else "?"
+                    print(f"  {e.index:3}. [{dur}] {e.title}")
+                if playlist.video_count > 20:
+                    print(f"  {C.DIM}  ... and {playlist.video_count - 20} more{C.RESET}")
+                print()
+                return
+
+            _download_playlist(playlist, args)
+            return
+
+        # ── Single video mode ────────────────────────────────────────────────
         print(f"  {C.CYAN}Fetching video info: {args.url}{C.RESET}")
         info = get_video_info(args.url)
         print_video_info(info)
