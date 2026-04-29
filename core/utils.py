@@ -1,76 +1,37 @@
 """Utility functions and constants for YTDown."""
 
-import re
 import os
-import time
+import re
 
-# ─── HTTP Headers ─────────────────────────────────────────────────────────────
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept": (
-        "text/html,application/xhtml+xml,application/xml;q=0.9,"
-        "image/avif,image/webp,*/*;q=0.8"
-    ),
-    # Bypass EU consent / cookie consent
-    "Cookie": "SOCS=CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjUwNDE1LjA1X3AwGgJlbiACGgYIgJb5vAY",
-}
+# ─── Quality Ordering ─────────────────────────────────────────────────────────
 
-if os.environ.get("YOUTUBE_COOKIES"):
-    HEADERS["Cookie"] = os.environ.get("YOUTUBE_COOKIES")
-
-# ─── ITAG Quality Map ─────────────────────────────────────────────────────────
-# Reference: https://gist.github.com/AgentOak/34d47c65b1d28829bb17c24c04a0096
-
-ITAG_MAP = {
-    # Muxed (video + audio)
-    18:  {"quality": "360p",  "type": "muxed",  "ext": "mp4",  "codec": "avc1/mp4a"},
-    22:  {"quality": "720p",  "type": "muxed",  "ext": "mp4",  "codec": "avc1/mp4a"},
-    37:  {"quality": "1080p", "type": "muxed",  "ext": "mp4",  "codec": "avc1/mp4a"},
-    38:  {"quality": "3072p", "type": "muxed",  "ext": "mp4",  "codec": "avc1/mp4a"},
-    43:  {"quality": "360p",  "type": "muxed",  "ext": "webm", "codec": "vp8/vorbis"},
-    44:  {"quality": "480p",  "type": "muxed",  "ext": "webm", "codec": "vp8/vorbis"},
-    45:  {"quality": "720p",  "type": "muxed",  "ext": "webm", "codec": "vp8/vorbis"},
-    # Video only (adaptive)
-    137: {"quality": "1080p", "type": "video",  "ext": "mp4",  "codec": "avc1"},
-    248: {"quality": "1080p", "type": "video",  "ext": "webm", "codec": "vp9"},
-    136: {"quality": "720p",  "type": "video",  "ext": "mp4",  "codec": "avc1"},
-    247: {"quality": "720p",  "type": "video",  "ext": "webm", "codec": "vp9"},
-    135: {"quality": "480p",  "type": "video",  "ext": "mp4",  "codec": "avc1"},
-    244: {"quality": "480p",  "type": "video",  "ext": "webm", "codec": "vp9"},
-    134: {"quality": "360p",  "type": "video",  "ext": "mp4",  "codec": "avc1"},
-    243: {"quality": "360p",  "type": "video",  "ext": "webm", "codec": "vp9"},
-    133: {"quality": "240p",  "type": "video",  "ext": "mp4",  "codec": "avc1"},
-    242: {"quality": "240p",  "type": "video",  "ext": "webm", "codec": "vp9"},
-    160: {"quality": "144p",  "type": "video",  "ext": "mp4",  "codec": "avc1"},
-    278: {"quality": "144p",  "type": "video",  "ext": "webm", "codec": "vp9"},
-    # High quality video (adaptive)
-    271: {"quality": "1440p", "type": "video",  "ext": "webm", "codec": "vp9"},
-    264: {"quality": "1440p", "type": "video",  "ext": "mp4",  "codec": "avc1"},
-    272: {"quality": "4320p", "type": "video",  "ext": "webm", "codec": "vp9"},
-    313: {"quality": "2160p", "type": "video",  "ext": "webm", "codec": "vp9"},
-    401: {"quality": "2160p", "type": "video",  "ext": "mp4",  "codec": "av01"},
-    400: {"quality": "1440p", "type": "video",  "ext": "mp4",  "codec": "av01"},
-    # Audio only (adaptive)
-    140: {"quality": "128kbps", "type": "audio", "ext": "m4a",  "codec": "mp4a"},
-    141: {"quality": "256kbps", "type": "audio", "ext": "m4a",  "codec": "mp4a"},
-    251: {"quality": "160kbps", "type": "audio", "ext": "webm", "codec": "opus"},
-    250: {"quality": "70kbps",  "type": "audio", "ext": "webm", "codec": "opus"},
-    249: {"quality": "50kbps",  "type": "audio", "ext": "webm", "codec": "opus"},
-    139: {"quality": "48kbps",  "type": "audio", "ext": "m4a",  "codec": "mp4a"},
-}
-
-# Quality ordering for sorting (lower index = higher quality)
 QUALITY_ORDER = [
     "4320p", "2160p", "1440p", "1080p", "720p",
     "480p", "360p", "240p", "144p",
     "256kbps", "160kbps", "128kbps", "70kbps", "50kbps", "48kbps",
 ]
+
+
+# ─── HTTP Headers ───────────────────────────────────────────────────────────
+
+def get_browser_headers() -> dict:
+    """Return headers mimicking a real Chrome browser."""
+    return {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": (
+            "*/*"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate",
+        "Content-Type": "application/json",
+        "Origin": "https://www.youtube.com",
+        "Referer": "https://www.youtube.com/",
+    }
 
 
 # ─── String Helpers ───────────────────────────────────────────────────────────
@@ -79,7 +40,7 @@ def sanitize_filename(name: str) -> str:
     """Remove characters unsafe for filenames."""
     name = re.sub(r'[<>:"/\\|?*]', "_", name)
     name = re.sub(r"\s+", " ", name).strip()
-    return name[:200]  # Limit length
+    return name[:200]
 
 
 def format_bytes(size: int) -> str:
@@ -112,7 +73,7 @@ def extract_video_id(url: str) -> str | None:
     """Extract YouTube video ID from various URL formats."""
     patterns = [
         r"(?:youtube\.com/watch\?(?:.*&)?v=|youtu\.be/|youtube\.com/embed/|youtube\.com/v/)([A-Za-z0-9_-]{11})",
-        r"^([A-Za-z0-9_-]{11})$",  # Raw video ID
+        r"^([A-Za-z0-9_-]{11})$",
     ]
     for pattern in patterns:
         match = re.search(pattern, url)
@@ -128,32 +89,6 @@ def quality_sort_key(quality: str) -> int:
     except ValueError:
         return 999
 
-
-def get_sapisidhash(cookie_str: str) -> str | None:
-    """Generate the SAPISIDHASH Authorization header from a cookie string.
-
-    Tries multiple cookie patterns in order of reliability:
-    SAPISID → __Secure-3PAPISID → __Secure-1PSID → APISID
-    """
-    import time
-    import hashlib
-
-    # Try each authentication cookie pattern, most reliable first
-    for pattern in [
-        r'SAPISID=([^;]+)',
-        r'__Secure-3PAPISID=([^;]+)',
-        r'__Secure-1PSID=([^;]+)',
-        r'APISID=([^;]+)',
-    ]:
-        match = re.search(pattern, cookie_str)
-        if match:
-            sapisid = match.group(1)
-            timestamp = int(time.time())
-            msg = f"{timestamp} {sapisid} https://www.youtube.com"
-            hash_str = hashlib.sha1(msg.encode("utf-8")).hexdigest()
-            return f"SAPISIDHASH {timestamp}_{hash_str}"
-
-    return None
 
 def ensure_dir(path: str) -> None:
     """Create directory if it does not exist."""
