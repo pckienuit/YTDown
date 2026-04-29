@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git show *)",
+      "Bash(python test_web_client.py)",
+      "Bash(python -c \"from core.extractor import get_video_info; info = get_video_info\\('B3NEtEDzlQk'\\)\")",
+      "Bash(python -c \"from core.extractor import get_video_info; info = get_video_info\\('B3NEtEDzlQk'\\); print\\(f'Success: {info.title}'\\)\")",
+      "Bash(python get_credentials.py)",
+      "Bash(python -c \"from core.extractor import get_video_info; info = get_video_info\\('B3NEtEDzlQk'\\); print\\(f'Title: {info.title}'\\); print\\(f'Streams: {len\\(info.streams\\)}'\\)\")"
+    ]
+  }
+}

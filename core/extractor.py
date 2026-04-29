@@ -6,6 +6,7 @@ without requiring signature cipher decryption.
 """
 
 import json
+import os
 import re
 import sys
 import urllib.error
@@ -240,35 +241,66 @@ def _get_visitor_data() -> str:
     if _visitor_data_cache:
         return _visitor_data_cache
 
-    try:
-        req = urllib.request.Request(
-            "https://www.youtube.com/",
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-                "Accept-Language": "en-US,en;q=0.9",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            html = resp.read().decode("utf-8", errors="ignore")
+    # Allow override via environment variable (useful for serverless deployments)
+    env_visitor = os.environ.get("VISITOR_DATA")
+    if env_visitor:
+        _visitor_data_cache = env_visitor
+        print("  [DEBUG] Using VISITOR_DATA from environment")
+        return _visitor_data_cache
 
-        # Extract from ytcfg.set({"VISITOR_DATA": "..."})
-        m = re.search(r'"VISITOR_DATA"\s*:\s*"([^"]+)"', html)
-        if m:
-            _visitor_data_cache = m.group(1)
-            return _visitor_data_cache
+    # Detect serverless environment (Vercel, etc.)
+    is_vercel = os.environ.get("VERCEL") == "1"
 
-        # Fallback: extract from visitorData key
-        m = re.search(r'"visitorData"\s*:\s*"([^"]+)"', html)
-        if m:
-            _visitor_data_cache = m.group(1)
-            return _visitor_data_cache
-    except Exception:
-        pass
+    # Try multiple approaches to fetch visitorData
+    urls_to_try = [
+        "https://www.youtube.com/",
+        "https://www.youtube.com/?persist_gl=1&gl=US",
+    ]
 
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    ]
+
+    # Use shorter timeout in serverless environments
+    timeout = 5 if is_vercel else 15
+
+    for url in urls_to_try:
+        for ua in user_agents:
+            try:
+                req = urllib.request.Request(
+                    url,
+                    headers={
+                        "User-Agent": ua,
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    },
+                )
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    html = resp.read().decode("utf-8", errors="ignore")
+
+                # Try multiple extraction patterns
+                patterns = [
+                    r'"VISITOR_DATA"\s*:\s*"([^"]+)"',
+                    r'"visitorData"\s*:\s*"([^"]+)"',
+                    r'ytcfg\.set\(\s*{[^}]*"VISITOR_DATA"\s*:\s*"([^"]+)"',
+                ]
+
+                for pattern in patterns:
+                    m = re.search(pattern, html)
+                    if m:
+                        _visitor_data_cache = m.group(1)
+                        print(f"  [DEBUG] Successfully extracted visitorData from {url} using pattern {pattern[:30]}...")
+                        return _visitor_data_cache
+
+            except Exception as e:
+                print(f"  [DEBUG] Attempt to fetch visitorData from {url} failed: {e}")
+                continue
+
+    if is_vercel:
+        print("  [WARN] Vercel: Unable to fetch visitorData automatically. Set VISITOR_DATA env var as fallback.")
+    else:
+        print("  [DEBUG] All attempts to fetch visitorData failed")
     return ""
 
 
