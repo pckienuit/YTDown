@@ -21,6 +21,9 @@ HEADERS = {
     "Cookie": "SOCS=CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjUwNDE1LjA1X3AwGgJlbiACGgYIgJb5vAY",
 }
 
+if os.environ.get("YOUTUBE_COOKIES"):
+    HEADERS["Cookie"] = os.environ.get("YOUTUBE_COOKIES")
+
 # ─── ITAG Quality Map ─────────────────────────────────────────────────────────
 # Reference: https://gist.github.com/AgentOak/34d47c65b1d28829bb17c24c04a0096
 
