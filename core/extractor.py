@@ -82,32 +82,33 @@ _CLIENTS: dict[str, dict] = {
             "Origin": "https://www.youtube.com",
         },
     },
-    # ── Android VR — direct URLs, may trigger bot check ────────────────────
+    # ── Android VR — direct URLs, often bypasses age-restriction ───────────
     "ANDROID_VR": {
         "client": {
             "clientName": "ANDROID_VR",
-            "clientVersion": "1.60.19",
+            "clientVersion": "1.50.34",
             "androidSdkVersion": 32,
             "hl": "en",
+            "gl": "US",
             "timeZone": "UTC",
             "utcOffsetMinutes": 0,
         },
         "headers": {
             "Content-Type": "application/json",
             "User-Agent": (
-                "com.google.android.apps.youtube.vr.oculus/1.60.19 "
+                "com.google.android.apps.youtube.vr.oculus/1.50.34 "
                 "(Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip"
             ),
             "X-YouTube-Client-Name": "ANDROID_VR",
-            "X-YouTube-Client-Version": "1.60.19",
+            "X-YouTube-Client-Version": "1.50.34",
             "Origin": "https://www.youtube.com",
         },
     },
     # ── TV embed — bypasses age-restriction ────────────────────────────────
     "TVHTML5": {
         "client": {
-            "clientName": "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
-            "clientVersion": "2.0",
+            "clientName": "TVHTML5",
+            "clientVersion": "1.20230619.04.00",
             "hl": "en",
             "timeZone": "UTC",
             "utcOffsetMinutes": 0,
@@ -118,8 +119,29 @@ _CLIENTS: dict[str, dict] = {
                 "Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 "
                 "(KHTML, like Gecko) Version/6.0 TV Safari/538.1"
             ),
-            "X-YouTube-Client-Name": "85",
-            "X-YouTube-Client-Version": "2.0",
+            "X-YouTube-Client-Name": "64",
+            "X-YouTube-Client-Version": "1.20230619.04.00",
+            "Origin": "https://www.youtube.com",
+            "Referer": "https://www.youtube.com/",
+        },
+    },
+    # ── Android Embed — alternative age-restriction bypass ────────────────
+    "ANDROID_EMBED": {
+        "client": {
+            "clientName": "ANDROID_EMBEDDED_PLAYER",
+            "clientVersion": "19.30.36",
+            "androidSdkVersion": 34,
+            "hl": "en",
+            "gl": "US",
+        },
+        "headers": {
+            "Content-Type": "application/json",
+            "User-Agent": (
+                "com.google.android.youtube/19.30.36 "
+                "(Linux; U; Android 14; en_US; Pixel 7 Build/UQ1A.240205.002) gzip"
+            ),
+            "X-YouTube-Client-Name": "3",
+            "X-YouTube-Client-Version": "19.30.36",
             "Origin": "https://www.youtube.com",
             "Referer": "https://www.youtube.com/",
         },
@@ -149,7 +171,7 @@ _CLIENTS: dict[str, dict] = {
 }
 
 # Client fallback order — most reliable first
-_CLIENT_ORDER = ["IOS", "ANDROID", "ANDROID_VR", "TVHTML5", "WEB"]
+_CLIENT_ORDER = ["IOS", "ANDROID", "ANDROID_VR", "TVHTML5", "ANDROID_EMBED", "WEB"]
 
 
 # ─── Data Models ──────────────────────────────────────────────────────────────
@@ -270,6 +292,8 @@ def _innertube_player(video_id: str, client_name: str = "IOS") -> dict:
     payload = json.dumps({
         "videoId": video_id,
         "context": context,
+        "contentCheckOk": True,
+        "racyCheckOk": True,
     }).encode("utf-8")
 
     headers = dict(client_cfg["headers"])
@@ -310,6 +334,7 @@ def _check_playability(player_response: dict) -> tuple[bool, str]:
         "ERROR":               f"error: {message}",
         "LIVE_STREAM_OFFLINE": "live stream is offline",
         "CONTENT_CHECK_REQUIRED": "content check required (age-restricted)",
+        "AGE_CHECK_REQUIRED":  "age-restricted: authentication required",
     }
     err = error_map.get(reason, f"{reason}: {message}")
     return False, err
