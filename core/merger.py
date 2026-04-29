@@ -138,6 +138,8 @@ def _run_ffmpeg(args: list[str], label: str = "Processing") -> None:
         cmd,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
 
     if proc.returncode != 0:

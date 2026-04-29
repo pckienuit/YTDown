@@ -85,7 +85,11 @@ def extract_playlist_id(url: str) -> Optional[str]:
 def _fetch_playlist_page(playlist_id: str) -> str:
     """Fetch the playlist page HTML."""
     url = f"https://www.youtube.com/playlist?list={playlist_id}"
-    req = urllib.request.Request(url, headers=_PAGE_HEADERS)
+    from core.utils import HEADERS
+    headers = dict(_PAGE_HEADERS)
+    if "Cookie" in HEADERS:
+        headers["Cookie"] = HEADERS["Cookie"]
+    req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return resp.read().decode("utf-8", errors="replace")

@@ -292,14 +292,16 @@ def _innertube_player(video_id: str, client_name: str = "IOS") -> dict:
     payload = json.dumps({
         "videoId": video_id,
         "context": context,
-        "contentCheckOk": True,
-        "racyCheckOk": True,
     }).encode("utf-8")
 
     headers = dict(client_cfg["headers"])
     headers.setdefault("Accept-Language", "en-US,en;q=0.9")
     if visitor_data:
         headers["X-Goog-Visitor-Id"] = visitor_data
+        
+    from core.utils import HEADERS
+    if "Cookie" in HEADERS:
+        headers["Cookie"] = HEADERS["Cookie"]
 
     req = urllib.request.Request(url, data=payload, headers=headers)
     try:

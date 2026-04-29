@@ -197,11 +197,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="For playlists: download only videos N through M (e.g. 1-10)",
     )
     p.add_argument(
-        "--concurrent",
-        type=int,
-        default=1,
-        metavar="N",
-        help="Playlist: number of concurrent downloads (default: 1)",
+        "--cookies",
+        metavar="FILE",
+        help="Path to a Netscape format cookies.txt file",
     )
     return p
 
@@ -292,6 +290,23 @@ def main():
 
     parser = build_parser()
     args = parser.parse_args()
+
+    if args.cookies:
+        try:
+            from core.utils import HEADERS
+            cookie_strs = []
+            with open(args.cookies, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"): continue
+                    parts = line.split("\t")
+                    if len(parts) >= 7:
+                        cookie_strs.append(f"{parts[5]}={parts[6]}")
+            if cookie_strs:
+                HEADERS["Cookie"] = "; ".join(cookie_strs)
+                print(f"  {C.GREEN}Loaded {len(cookie_strs)} cookies.{C.RESET}")
+        except Exception as e:
+            print(f"  {C.YELLOW}Warning: Could not load cookies: {e}{C.RESET}")
 
     try:
         # ── Playlist mode ───────────────────────────────────────────────────
