@@ -7,13 +7,11 @@
 const state = {
   videoInfo:         null,
   selectedQuality:   null,
-  activeJobId:       null,
-  progressSource:    null,
+  selectedStreamUrl: null,
 
   // Playlist
   playlistInfo:      null,   // { playlist_id, title, entries, … }
   selectedVideoIds:  new Set(),
-  batchJobIds:       [],
 };
 
 // ── DOM shortcuts ─────────────────────────────────────────────
@@ -42,25 +40,13 @@ window.addEventListener('DOMContentLoaded', () => {
 
 // ── Server Status ─────────────────────────────────────────────
 
-async function checkStatus() {
-  try {
-    const res  = await fetch('/api/status');
-    const data = await res.json();
-    const badge  = $('ffmpegBadge');
-    const notice = $('ffmpegNotice');
-    if (data.ffmpeg?.available) {
-      badge.textContent  = `FFmpeg ${data.ffmpeg.version}`;
-      badge.className    = 'badge badge-green';
-      notice.classList.add('hidden');
-    } else {
-      badge.textContent  = 'FFmpeg: not found';
-      badge.className    = 'badge badge-yellow';
-      notice.classList.remove('hidden');
-    }
-  } catch (_) {
-    $('ffmpegBadge').textContent = 'Server error';
-    $('ffmpegBadge').className   = 'badge badge-dim';
-  }
+function checkStatus() {
+  // Client-side only on Vercel, no FFmpeg available for merging.
+  const badge  = $('ffmpegBadge');
+  const notice = $('ffmpegNotice');
+  badge.textContent  = 'Client-side Download Mode';
+  badge.className    = 'badge badge-green';
+  notice.classList.add('hidden');
 }
 
 // ── Fetch Video Info ──────────────────────────────────────────
@@ -182,45 +168,64 @@ function onPlAudioChange() {
 async function startPlaylistDownload() {
   if (!state.playlistInfo || state.selectedVideoIds.size === 0) return;
 
-  const quality     = $('plAudioToggle').checked ? 'best' : ($('plQualitySelect').value || 'best');
   const audio_only  = $('plAudioToggle').checked;
-  const audio_format= document.querySelector('input[name="plaf"]:checked')?.value || 'm4a';
-
-  try {
-    const res = await fetch('/api/playlist-download', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        video_ids:    [...state.selectedVideoIds],
-        playlist_id:  state.playlistInfo.playlist_id,
-        quality,
-        audio_only,
-        audio_format,
-      }),
-    });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    state.batchJobIds = data.job_ids || [];
-    // Show feedback in history pane
-    hide('playlistSection');
-    showPlaylistQueued(data.total);
-    refreshHistory();
-  } catch (err) {
-    alert('Failed to start download: ' + err.message);
-  }
-}
-
-function showPlaylistQueued(total) {
-  hide('doneSection');
-  hide('errorSection');
-  // Show a simple progress card
+  // For playlists, we have to fetch info for each video to get the download URL.
+  // We will do this sequentially to avoid rate limits.
+  
+  hide('playlistSection');
   show('progressSection');
   $('progressTitle').textContent = state.playlistInfo?.title || 'Playlist';
-  $('progressStep').textContent  = `Queued ${total} video${total > 1 ? 's' : ''} — see history below`;
+  $('progressStep').textContent  = `Processing ${state.selectedVideoIds.size} videos...`;
   setProgress(0);
+
+  const videoIds = [...state.selectedVideoIds];
+  
+  for (let i = 0; i < videoIds.length; i++) {
+    const vid = videoIds[i];
+    $('progressStep').textContent  = `Fetching video ${i + 1}/${videoIds.length}...`;
+    setProgress((i / videoIds.length) * 100);
+    
+    try {
+      const res = await fetch('/api/info', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: `https://youtube.com/watch?v=${vid}` }),
+      });
+      const data = await res.json();
+      if (!data.error && data.streams && data.streams.length > 0) {
+        let stream;
+        if (audio_only) {
+          stream = data.streams.find(s => s.stream_type === 'audio') || data.streams[0];
+        } else {
+          // Muxed stream (video + audio) since we can't merge client-side
+          stream = data.streams.find(s => s.stream_type === 'muxed') || data.streams.find(s => s.stream_type === 'audio');
+        }
+        
+        if (stream) {
+          triggerBrowserDownload(stream.url, `${data.title}.${stream.ext}`);
+          saveJobToHistory({
+            job_id: Math.random().toString(36).substring(7),
+            title: data.title,
+            quality: stream.quality,
+            audio_only: audio_only,
+            status: 'done',
+            output_file: `${data.title}.${stream.ext}`
+          });
+        }
+      }
+    } catch (e) {
+      console.error(`Failed to download video ${vid}:`, e);
+    }
+    
+    // Slight delay between videos
+    await new Promise(r => setTimeout(r, 1000));
+  }
+
+  setProgress(100);
+  $('progressStep').textContent  = `Finished queuing downloads!`;
+  setTimeout(() => showDone('Batch Download Complete'), 1500);
+  refreshHistory();
 }
-
-
 
 function setFetchLoading(on) {
   $('fetchBtn').disabled   = on;
@@ -244,8 +249,8 @@ function renderVideoPreview(info) {
 
   const sc = info.stream_counts;
   $('streamCounts').innerHTML = `
-    <span class="count-pill">${sc.video} video streams</span>
-    <span class="count-pill">${sc.audio} audio streams</span>
+    <span class="count-pill">${sc.muxed || 0} muxed streams</span>
+    <span class="count-pill">${sc.audio || 0} audio streams</span>
   `;
 }
 
@@ -272,17 +277,17 @@ function renderQualityGrid(info) {
         filesize:   s.filesize,
         audio_only: true,
         isAudio:    true,
+        url:        s.url
       }));
     });
 
-    // Default: best audio
     if (audioStreams.length > 0) {
       const best = audioStreams[0];
-      selectQuality(best.quality, true);
+      selectQuality(best.quality, true, best.url, best.ext);
     }
   } else {
-    // Video streams — deduplicate by quality+ext, prioritise mp4
-    const videoStreams = info.streams.filter(s => s.stream_type === 'video' || s.stream_type === 'muxed');
+    // Muxed streams only (we cannot merge video+audio on client safely)
+    const videoStreams = info.streams.filter(s => s.stream_type === 'muxed');
     const byQuality   = {};
     videoStreams.forEach(s => {
       const q = s.quality;
@@ -300,22 +305,22 @@ function renderQualityGrid(info) {
         filesize:   s.filesize,
         audio_only: false,
         isAudio:    false,
+        url:        s.url
       }));
     });
 
-    // Default: best
-    if (sorted.length > 0) selectQuality(sorted[0].quality, false);
+    if (sorted.length > 0) selectQuality(sorted[0].quality, false, sorted[0].url, sorted[0].ext);
   }
 
   $('noStreams').classList.toggle('hidden', grid.children.length > 0);
 }
 
-function makeQualityTile({ quality, ext, filesize, audio_only, isAudio }) {
+function makeQualityTile({ quality, ext, filesize, audio_only, isAudio, url }) {
   const tile = document.createElement('div');
   tile.className = `quality-tile${isAudio ? ' audio-tile' : ''}`;
   tile.dataset.quality    = quality;
   tile.dataset.audio_only = audio_only;
-  tile.onclick = () => selectQuality(quality, audio_only);
+  tile.onclick = () => selectQuality(quality, audio_only, url, ext);
 
   const size = filesize ? formatBytes(filesize) : '';
   tile.innerHTML = `
@@ -325,8 +330,10 @@ function makeQualityTile({ quality, ext, filesize, audio_only, isAudio }) {
   return tile;
 }
 
-function selectQuality(quality, audioOnly) {
-  state.selectedQuality = { quality, audio_only: audioOnly };
+function selectQuality(quality, audioOnly, url, ext) {
+  state.selectedQuality = { quality, audio_only: audioOnly, ext };
+  state.selectedStreamUrl = url;
+  
   document.querySelectorAll('.quality-tile').forEach(t => {
     t.classList.toggle('selected',
       t.dataset.quality === quality && t.dataset.audio_only === String(audioOnly)
@@ -346,101 +353,58 @@ function onAudioOnlyChange() {
 
 // ── Start Download ─────────────────────────────────────────────
 
-async function startDownload() {
-  if (!state.videoInfo || !state.selectedQuality) return;
+function triggerBrowserDownload(streamUrl, filename) {
+  const proxyUrl = `/api/proxy?url=${encodeURIComponent(streamUrl)}&title=${encodeURIComponent(filename)}`;
+  
+  // Create an invisible anchor element and trigger download
+  const a = document.createElement('a');
+  a.style.display = 'none';
+  a.href = proxyUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  
+  // Cleanup
+  setTimeout(() => {
+    document.body.removeChild(a);
+  }, 1000);
+}
 
-  const { quality, audio_only } = state.selectedQuality;
-  const af = document.querySelector('input[name="af"]:checked')?.value || 'm4a';
+async function startDownload() {
+  if (!state.videoInfo || !state.selectedQuality || !state.selectedStreamUrl) return;
+
+  const { quality, audio_only, ext } = state.selectedQuality;
+  const title = state.videoInfo.title;
+  const filename = `${sanitizeFilename(title)}.${ext}`;
 
   hide('qualitySection');
   hide('videoSection');
   show('progressSection');
-  $('progressTitle').textContent = state.videoInfo.title;
-  $('progressStep').textContent  = 'Starting...';
-  setProgress(0);
+  $('progressTitle').textContent = title;
+  $('progressStep').textContent  = 'Starting download via browser...';
+  setProgress(50);
 
   try {
-    const res  = await fetch('/api/download', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        url:          $('urlInput').value.trim(),
-        quality,
-        audio_only,
-        audio_format: af,
-      }),
+    triggerBrowserDownload(state.selectedStreamUrl, filename);
+    
+    // Save to local storage history
+    saveJobToHistory({
+      job_id: Math.random().toString(36).substring(7),
+      title: title,
+      quality: quality,
+      audio_only: audio_only,
+      status: 'done',
+      output_file: filename,
+      timestamp: Date.now()
     });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
 
-    state.activeJobId = data.job_id;
-    listenProgress(data.job_id);
+    setProgress(100);
+    $('progressStep').textContent  = 'Download sent to browser!';
+    setTimeout(() => showDone(filename), 1000);
+    refreshHistory();
   } catch (err) {
     showDownloadError(err.message);
   }
-}
-
-// ── SSE Progress ───────────────────────────────────────────────
-
-function listenProgress(jobId) {
-  if (state.progressSource) state.progressSource.close();
-
-  const es = new EventSource(`/api/progress/${jobId}`);
-  state.progressSource = es;
-
-  es.onmessage = e => {
-    const ev = JSON.parse(e.data);
-
-    if (ev.type === 'progress') {
-      setProgress(ev.progress);
-      $('progressStep').textContent = stepLabel(ev.step);
-
-      const dl    = formatBytes(ev.downloaded);
-      const total = ev.total > 0 ? formatBytes(ev.total) : '?';
-      const spd   = formatBytes(ev.speed) + '/s';
-      $('progressDl').textContent    = `${dl} / ${total}`;
-      $('progressSpeed').textContent = spd;
-
-      if (ev.total > 0 && ev.speed > 0) {
-        const eta = Math.round((ev.total - ev.downloaded) / ev.speed);
-        $('progressEta').textContent = `ETA ${formatTime(eta)}`;
-      }
-    }
-
-    if (ev.type === 'done') {
-      es.close();
-      setProgress(100);
-      setTimeout(() => showDone(ev.output_file), 300);
-      refreshHistory();
-    }
-
-    if (ev.type === 'error') {
-      es.close();
-      showDownloadError(ev.message);
-    }
-  };
-
-  es.onerror = () => {
-    es.close();
-    // Check job status manually
-    setTimeout(() => pollJobStatus(jobId), 1000);
-  };
-}
-
-async function pollJobStatus(jobId) {
-  try {
-    const res  = await fetch('/api/jobs');
-    const data = await res.json();
-    const job  = data.jobs.find(j => j.job_id === jobId);
-    if (!job) return;
-    if (job.status === 'done') {
-      setProgress(100);
-      showDone(job.output_file);
-      refreshHistory();
-    } else if (job.status === 'error') {
-      showDownloadError(job.error);
-    }
-  } catch (_) {}
 }
 
 // ── UI State Transitions ──────────────────────────────────────
@@ -454,7 +418,10 @@ function showDone(filename) {
   hide('progressSection');
   show('doneSection');
   $('doneFilename').textContent = filename;
-  $('doneDownloadLink').href    = `/downloads/${encodeURIComponent(filename)}`;
+  // For client downloads, we don't have a server-hosted file to link back to,
+  // the browser already downloaded it. Just display the name.
+  $('doneDownloadLink').href = '#';
+  $('doneDownloadLink').onclick = (e) => { e.preventDefault(); alert('File was downloaded via your browser!'); };
 }
 
 function showDownloadError(msg) {
@@ -468,7 +435,7 @@ function resetUI() {
   $('urlInput').value        = '';
   state.videoInfo            = null;
   state.selectedQuality      = null;
-  state.activeJobId          = null;
+  state.selectedStreamUrl    = null;
   $('audioOnlyToggle').checked = false;
   $('audioFormatRow').classList.add('hidden');
   hide('videoSection');
@@ -488,18 +455,30 @@ function resetToQuality() {
 
 // ── History ────────────────────────────────────────────────────
 
-async function refreshHistory() {
+function getHistory() {
   try {
-    const res  = await fetch('/api/jobs');
-    const data = await res.json();
-    renderHistory(data.jobs);
-  } catch (_) {}
+    const raw = localStorage.getItem('ytdown_history');
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveJobToHistory(job) {
+  const jobs = getHistory();
+  jobs.unshift(job);
+  // Keep only last 20
+  if (jobs.length > 20) jobs.pop();
+  localStorage.setItem('ytdown_history', JSON.stringify(jobs));
+}
+
+function refreshHistory() {
+  const jobs = getHistory();
+  renderHistory(jobs);
 }
 
 function loadHistory() {
   refreshHistory();
-  // Refresh every 3s while page open
-  setInterval(refreshHistory, 3000);
 }
 
 function renderHistory(jobs) {
@@ -511,27 +490,12 @@ function renderHistory(jobs) {
   $('historySection').classList.remove('hidden');
 
   list.innerHTML = jobs.slice(0, 20).map(j => {
-    const isDone    = j.status === 'done';
-    const isRunning = j.status === 'running' || j.status === 'pending';
-    const isError   = j.status === 'error';
-
-    const dlLink = isDone && j.output_file
-      ? `<a class="hi-dl-link" href="/downloads/${encodeURIComponent(j.output_file)}" title="Save to disk">⬇</a>`
-      : isRunning
-        ? `<span style="font-size:12px;color:var(--text-dim)">${Math.round(j.progress)}%</span>`
-        : '';
-
-    // Playlist batch label
-    const plLabel = j.playlist_total > 0
-      ? `<span style="font-size:10px;color:var(--purple);font-weight:600">[${j.playlist_index}/${j.playlist_total}]</span> `
-      : '';
-
+    // All client-initiated jobs are considered 'done' from app perspective since browser manages them
     return `
       <div class="history-item">
-        <span class="hi-status ${j.status}"></span>
-        <span class="hi-title" title="${escHtml(j.title)}">${plLabel}${escHtml(j.title)}</span>
+        <span class="hi-status done"></span>
+        <span class="hi-title" title="${escHtml(j.title)}">${escHtml(j.title)}</span>
         <span class="hi-quality">${j.quality}${j.audio_only ? ' 🎵' : ''}</span>
-        ${dlLink}
       </div>
     `;
   }).join('');
@@ -561,10 +525,8 @@ function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-function stepLabel(raw) {
-  if (!raw) return 'Downloading...';
-  const map = { 'Video': '⬇ Downloading video...', 'Audio': '⬇ Downloading audio...' };
-  return map[raw] || raw;
+function sanitizeFilename(name) {
+  return name.replace(/[<>:"/\\|?*]+/g, '_');
 }
 
 const QUALITY_ORDER = ['4320p','2160p','1440p','1080p','720p','480p','360p','240p','144p'];

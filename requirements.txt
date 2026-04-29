@@ -1,7 +1,1 @@
-# YTDown - YouTube Downloader
-# This project is built entirely with Python Standard Library components.
-# No external Python packages (like yt-dlp, requests, flask) are required to run the CLI or the web server.
-
-# System Requirements:
-# - Python 3.10+ (for modern standard library features like type hints and updated urllib)
-# - FFmpeg (Used for merging downloaded video and audio files)
+Flask==3.0.0
