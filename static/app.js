@@ -69,23 +69,45 @@ async function fetchInfo() {
   try {
     // Auto-detect playlist URL
     if (url.includes('list=')) {
-      const res  = await fetch('/api/playlist-info', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url }),
-      });
-      const data = await res.json();
+      let res, data;
+      try {
+        res = await fetch('/api/playlist-info-edge', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url }),
+        });
+        data = await res.json();
+      } catch (e) {
+        res = await fetch('/api/playlist-info', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url }),
+        });
+        data = await res.json();
+      }
       if (data.error) throw new Error(data.error);
       state.playlistInfo = data;
       renderPlaylist(data);
       show('playlistSection');
     } else {
-      const res  = await fetch('/api/info', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url }),
-      });
-      const data = await res.json();
+      // Try Edge Function first (serverless-friendly), fallback to Flask
+      let res, data;
+      try {
+        res = await fetch('/api/video-info', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url }),
+        });
+        data = await res.json();
+      } catch (e) {
+        // Edge function not available (local dev), fall back to Flask
+        res = await fetch('/api/info', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url }),
+        });
+        data = await res.json();
+      }
       if (data.error) throw new Error(data.error);
       state.videoInfo = data;
       renderVideoPreview(data);

@@ -103,36 +103,57 @@ def _get_visitor_data(session: requests.Session) -> str:
         print(f"  [DEBUG] Using VISITOR_DATA from cookies: {visitor[:20]}...")
         return _visitor_data_cache
 
-    # 3. Fetch from YouTube homepage (retry with delay on failure)
-    for attempt in range(3):
-        try:
-            headers = get_browser_headers()
-            headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    # 3. Try multiple YouTube endpoints to get VISITOR_DATA
+    # Try http (no redirect) + https
+    endpoints = [
+        ("https://www.youtube.com/", "https_homepage"),
+        ("https://youtube.com/", "https_short"),
+        ("https://m.youtube.com/", "mobile"),
+        ("http://www.youtube.com/", "http_homepage"),
+    ]
 
-            resp = session.get("https://www.youtube.com/", headers=headers, timeout=15)
-            html = resp.text
+    for url, name in endpoints:
+        print(f"  [DEBUG] Trying {name} ({url})...")
+        for attempt in range(2):
+            try:
+                headers = get_browser_headers()
+                headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+                headers["Accept-Language"] = "en-US,en;q=0.9"
 
-            patterns = [
-                r'"VISITOR_DATA"\s*:\s*"([^"]+)"',
-                r'"visitorData"\s*:\s*"([^"]+)"',
-            ]
+                resp = session.get(url, headers=headers, timeout=20, allow_redirects=False)
+                print(f"  [DEBUG] {name}: status={resp.status_code}, url={resp.url}, size={len(resp.text)}")
 
-            for pattern in patterns:
-                m = re.search(pattern, html)
-                if m:
-                    _visitor_data_cache = m.group(1)
-                    print(f"  [DEBUG] Got VISITOR_DATA from homepage: {_visitor_data_cache[:20]}...")
-                    return _visitor_data_cache
+                # Follow redirects manually if needed
+                if resp.status_code in (301, 302, 303, 307, 308):
+                    location = resp.headers.get("Location", "")
+                    print(f"  [DEBUG] {name}: redirect to {location}")
 
-            if attempt < 2:
-                print(f"  [WARN] No VISITOR_DATA in response (attempt {attempt + 1}), retrying in 2s...")
-                time.sleep(2)
-        except Exception as e:
-            if attempt < 2:
-                print(f"  [WARN] Failed to fetch VISITOR_DATA (attempt {attempt + 1}): {e}")
-                time.sleep(2)
+                if resp.status_code != 200:
+                    print(f"  [WARN] {name} returned {resp.status_code}")
+                    if resp.status_code in (301, 302):
+                        continue
+                    break
 
-    print("  [WARN] Could not get VISITOR_DATA after all attempts")
+                html = resp.text
+
+                patterns = [
+                    r'"VISITOR_DATA"\s*:\s*"([^"]{10,})"',
+                    r'"visitorData"\s*:\s*"([^"]{10,})"',
+                    r'ytcfg\.set\s*\(\s*"VISITOR_DATA"\s*,\s*"([^"]{10,})"',
+                ]
+
+                for pattern in patterns:
+                    m = re.search(pattern, html)
+                    if m:
+                        _visitor_data_cache = m.group(1)
+                        print(f"  [DEBUG] Got VISITOR_DATA from {name}: {_visitor_data_cache[:20]}...")
+                        return _visitor_data_cache
+
+                print(f"  [WARN] No VISITOR_DATA in {name}")
+            except Exception as e:
+                print(f"  [WARN] {name} failed: {e}")
+
+    print("  [WARN] Could not get VISITOR_DATA from any endpoint")
     return ""
 
 
