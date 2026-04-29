@@ -367,12 +367,10 @@ def _innertube_request(video_id: str, client_name: str) -> dict:
     if visitor_data:
         headers["X-Goog-Visitor-Id"] = visitor_data
 
+    # Add cookies if available (from environment or default SOCS)
     headers_base = _get_headers()
     if "Cookie" in headers_base:
         headers["Cookie"] = headers_base["Cookie"]
-        sapisidhash = get_sapisidhash(headers_base["Cookie"])
-        if sapisidhash:
-            headers["Authorization"] = sapisidhash
 
     req = urllib.request.Request(url, data=payload, headers=headers)
     try:
