@@ -10,17 +10,41 @@
       "use": "@vercel/node"
     },
     {
+      "src": "api/video-info.js",
+      "use": "@vercel/node"
+    },
+    {
+      "src": "api/playlist-info-edge.js",
+      "use": "@vercel/node"
+    },
+    {
       "src": "static/**",
       "use": "@vercel/static"
     }
   ],
   "routes": [
     {
+      "src": "/api/video-info",
+      "dest": "/api/video-info.js"
+    },
+    {
+      "src": "/api/playlist-info-edge",
+      "dest": "/api/playlist-info-edge.js"
+    },
+    {
       "src": "/api/proxy",
       "dest": "/api/proxy.js"
     },
     {
-      "src": "/api/(.*)",
+      "src": "/api/info",
+      "dest": "/api/index.py"
+    },
+    {
+      "src": "/api/info-client",
+      "dest": "/api/index.py"
+    },
+    {
+      "src": "/api/playlist-info",
       "dest": "/api/index.py"
     },
     {
