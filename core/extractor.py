@@ -299,9 +299,12 @@ def _innertube_player(video_id: str, client_name: str = "IOS") -> dict:
     if visitor_data:
         headers["X-Goog-Visitor-Id"] = visitor_data
         
-    from core.utils import HEADERS
+    from core.utils import HEADERS, get_sapisidhash
     if "Cookie" in HEADERS:
         headers["Cookie"] = HEADERS["Cookie"]
+        sapisidhash = get_sapisidhash(HEADERS["Cookie"])
+        if sapisidhash:
+            headers["Authorization"] = sapisidhash
 
     req = urllib.request.Request(url, data=payload, headers=headers)
     try:

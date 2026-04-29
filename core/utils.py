@@ -129,6 +129,22 @@ def quality_sort_key(quality: str) -> int:
         return 999
 
 
+def get_sapisidhash(cookie_str: str) -> str | None:
+    """Generate the SAPISIDHASH Authorization header from a cookie string."""
+    import time
+    import hashlib
+    import re
+    
+    match = re.search(r'(?:SAPISID|__Secure-3PAPISID)=([^;]+)', cookie_str)
+    if not match:
+        return None
+        
+    sapisid = match.group(1)
+    timestamp = int(time.time())
+    msg = f"{timestamp} {sapisid} https://www.youtube.com"
+    hash_str = hashlib.sha1(msg.encode("utf-8")).hexdigest()
+    return f"SAPISIDHASH {timestamp}_{hash_str}"
+
 def ensure_dir(path: str) -> None:
     """Create directory if it does not exist."""
     os.makedirs(path, exist_ok=True)
