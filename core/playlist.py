@@ -132,7 +132,8 @@ def _extract_initial_data(html: str) -> dict:
 def _continue_playlist(token: str) -> dict:
     """Fetch the next page of playlist items via InnerTube continuation."""
     url  = "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false"
-    
+
+    from core.extractor import _get_visitor_data
     from core.utils import HEADERS, get_sapisidhash
     headers = dict(_INNERTUBE_HEADERS)
     if "Cookie" in HEADERS:
@@ -141,6 +142,7 @@ def _continue_playlist(token: str) -> dict:
         if sapisidhash:
             headers["Authorization"] = sapisidhash
 
+    visitor_data = _get_visitor_data()
     body = json.dumps({
         "context": {
             "client": {
@@ -148,10 +150,13 @@ def _continue_playlist(token: str) -> dict:
                 "clientVersion": "2.20240726.00.00",
                 "hl": "en",
                 "gl": "US",
+                "visitorData": visitor_data or "",
             }
         },
         "continuation": token,
     }).encode("utf-8")
+    if visitor_data:
+        headers["X-Goog-Visitor-Id"] = visitor_data
     req = urllib.request.Request(url, data=body, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=12) as resp:

@@ -130,20 +130,30 @@ def quality_sort_key(quality: str) -> int:
 
 
 def get_sapisidhash(cookie_str: str) -> str | None:
-    """Generate the SAPISIDHASH Authorization header from a cookie string."""
+    """Generate the SAPISIDHASH Authorization header from a cookie string.
+
+    Tries multiple cookie patterns in order of reliability:
+    SAPISID → __Secure-3PAPISID → __Secure-1PSID → APISID
+    """
     import time
     import hashlib
-    import re
-    
-    match = re.search(r'(?:SAPISID|__Secure-3PAPISID)=([^;]+)', cookie_str)
-    if not match:
-        return None
-        
-    sapisid = match.group(1)
-    timestamp = int(time.time())
-    msg = f"{timestamp} {sapisid} https://www.youtube.com"
-    hash_str = hashlib.sha1(msg.encode("utf-8")).hexdigest()
-    return f"SAPISIDHASH {timestamp}_{hash_str}"
+
+    # Try each authentication cookie pattern, most reliable first
+    for pattern in [
+        r'SAPISID=([^;]+)',
+        r'__Secure-3PAPISID=([^;]+)',
+        r'__Secure-1PSID=([^;]+)',
+        r'APISID=([^;]+)',
+    ]:
+        match = re.search(pattern, cookie_str)
+        if match:
+            sapisid = match.group(1)
+            timestamp = int(time.time())
+            msg = f"{timestamp} {sapisid} https://www.youtube.com"
+            hash_str = hashlib.sha1(msg.encode("utf-8")).hexdigest()
+            return f"SAPISIDHASH {timestamp}_{hash_str}"
+
+    return None
 
 def ensure_dir(path: str) -> None:
     """Create directory if it does not exist."""

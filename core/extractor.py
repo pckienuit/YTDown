@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -24,7 +25,13 @@ from core.utils import (
     extract_video_id,
     format_duration,
     quality_sort_key,
+    get_sapisidhash,
 )
+
+# Lazy-load HEADERS to avoid circular import
+def _get_headers() -> dict:
+    from core.utils import HEADERS
+    return dict(HEADERS)
 
 
 # ─── InnerTube Client Configs ────────────────────────────────────────────────
@@ -171,8 +178,14 @@ _CLIENTS: dict[str, dict] = {
     },
 }
 
-# Client fallback order — most reliable first
-_CLIENT_ORDER = ["IOS", "ANDROID", "ANDROID_VR", "TVHTML5", "ANDROID_EMBED", "WEB"]
+# Client fallback order — age-restriction bypassers first:
+#   TVHTML5 → ANDROID_EMBED → IOS → ANDROID → ANDROID_VR → WEB
+#
+# TVHTML5 (client 64) and ANDROID_EMBED bypass age-restriction most effectively.
+# IOS and ANDROID give direct URLs without cipher and rarely trigger bot checks.
+# WEB is last resort (may need cipher).
+
+_CLIENT_ORDER = ["TVHTML5", "ANDROID_EMBED", "IOS", "ANDROID", "ANDROID_VR", "WEB"]
 
 
 # ─── Data Models ──────────────────────────────────────────────────────────────
@@ -310,6 +323,29 @@ def _innertube_player(video_id: str, client_name: str = "IOS") -> dict:
     """
     Call InnerTube /youtubei/v1/player with the specified client.
     Returns the raw player response JSON.
+
+    Retries up to 2 times on HTTP 429 (rate limit) with exponential backoff.
+    """
+    max_retries = 2
+
+    for attempt in range(max_retries + 1):
+        try:
+            return _innertube_request(video_id, client_name)
+        except RuntimeError as e:
+            err_str = str(e).lower()
+            is_rate_limit = "429" in str(e) or "rate" in err_str or "too many requests" in err_str
+            if is_rate_limit and attempt < max_retries:
+                wait = 2 ** attempt
+                print(f"  ! Rate limited (attempt {attempt + 1}/{max_retries + 1}), waiting {wait}s...")
+                time.sleep(wait)
+                continue
+            raise
+
+
+def _innertube_request(video_id: str, client_name: str) -> dict:
+    """
+    Single InnerTube API request. Extracted to separate function so retry logic
+    in _innertube_player can wrap it cleanly.
     """
     client_cfg = _CLIENTS[client_name]
     _KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
@@ -330,11 +366,11 @@ def _innertube_player(video_id: str, client_name: str = "IOS") -> dict:
     headers.setdefault("Accept-Language", "en-US,en;q=0.9")
     if visitor_data:
         headers["X-Goog-Visitor-Id"] = visitor_data
-        
-    from core.utils import HEADERS, get_sapisidhash
-    if "Cookie" in HEADERS:
-        headers["Cookie"] = HEADERS["Cookie"]
-        sapisidhash = get_sapisidhash(HEADERS["Cookie"])
+
+    headers_base = _get_headers()
+    if "Cookie" in headers_base:
+        headers["Cookie"] = headers_base["Cookie"]
+        sapisidhash = get_sapisidhash(headers_base["Cookie"])
         if sapisidhash:
             headers["Authorization"] = sapisidhash
 
@@ -343,6 +379,8 @@ def _innertube_player(video_id: str, client_name: str = "IOS") -> dict:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
+        if e.code == 429:
+            raise RuntimeError("HTTP 429 Too Many Requests — rate limited by YouTube") from e
         raise RuntimeError(f"InnerTube API error: HTTP {e.code} {e.reason}") from e
     except urllib.error.URLError as e:
         raise RuntimeError(f"Network error: {e.reason}") from e
@@ -461,11 +499,15 @@ def get_video_info(url_or_id: str) -> VideoInfo:
     Fetch video information and available streams from YouTube.
 
     Tries multiple InnerTube clients in order (defined by _CLIENT_ORDER):
-    1. IOS          — direct URLs, rarely flagged by bot detection
-    2. ANDROID      — direct URLs, good bypass
-    3. ANDROID_VR   — direct URLs, may trigger bot check
-    4. TVHTML5      — bypasses age-restriction
-    5. WEB          — last resort (may need cipher)
+    1. TVHTML5       — bypasses age-restriction most effectively
+    2. ANDROID_EMBED — alternative age-restriction bypass
+    3. IOS           — direct URLs, rarely flagged by bot detection
+    4. ANDROID       — direct URLs, good bypass
+    5. ANDROID_VR    — direct URLs, may trigger bot check
+    6. WEB           — last resort (may need cipher)
+
+    On failure of all clients, retries once after a 3-second delay (graceful
+    degradation) before raising an error.
 
     Args:
         url_or_id: YouTube URL or 11-character video ID.
@@ -486,48 +528,53 @@ def get_video_info(url_or_id: str) -> VideoInfo:
 
     print(f"  -> Fetching video info: {video_id}")
 
-    # Try clients in order until one returns playable streams
+    # Outer loop: retry once with delay after all clients fail (graceful degradation)
     last_error = ""
+    for round_num in range(2):
+        for client_name in _CLIENT_ORDER:
+            try:
+                player_response = _innertube_player(video_id, client_name)
+                is_ok, err = _check_playability(player_response)
+                if not is_ok:
+                    last_error = err
+                    print(f"  ! Client {client_name} blocked ({err}), trying next...")
+                    continue
 
-    for client_name in _CLIENT_ORDER:
-        try:
-            player_response = _innertube_player(video_id, client_name)
-            is_ok, err = _check_playability(player_response)
-            if not is_ok:
-                last_error = err
-                print(f"  ! Client {client_name} blocked ({err}), trying next...")
+                streams = _parse_streams(player_response)
+                if not streams:
+                    last_error = "no streams in response"
+                    print(f"  ! Client {client_name} returned no streams, trying next...")
+                    continue
+
+                # Success — log only if we fell back from primary
+                if client_name != _CLIENT_ORDER[0]:
+                    print(f"  -> Used fallback client: {client_name}")
+
+                details   = player_response.get("videoDetails", {})
+                title     = details.get("title", "Unknown Title")
+                duration  = int(details.get("lengthSeconds", 0))
+                channel   = details.get("author", "Unknown Channel")
+                thumbnails= details.get("thumbnail", {}).get("thumbnails", [])
+                thumbnail = thumbnails[-1]["url"] if thumbnails else ""
+
+                return VideoInfo(
+                    video_id=video_id,
+                    title=title,
+                    duration_seconds=duration,
+                    channel=channel,
+                    thumbnail=thumbnail,
+                    streams=streams,
+                )
+
+            except RuntimeError as e:
+                last_error = str(e)
+                print(f"  ! Client {client_name} failed: {e}")
                 continue
 
-            streams = _parse_streams(player_response)
-            if not streams:
-                last_error = "no streams in response"
-                print(f"  ! Client {client_name} returned no streams, trying next...")
-                continue
-
-            # Success — log only if we fell back from primary
-            if client_name != _CLIENT_ORDER[0]:
-                print(f"  -> Used fallback client: {client_name}")
-
-            details   = player_response.get("videoDetails", {})
-            title     = details.get("title", "Unknown Title")
-            duration  = int(details.get("lengthSeconds", 0))
-            channel   = details.get("author", "Unknown Channel")
-            thumbnails= details.get("thumbnail", {}).get("thumbnails", [])
-            thumbnail = thumbnails[-1]["url"] if thumbnails else ""
-
-            return VideoInfo(
-                video_id=video_id,
-                title=title,
-                duration_seconds=duration,
-                channel=channel,
-                thumbnail=thumbnail,
-                streams=streams,
-            )
-
-        except RuntimeError as e:
-            last_error = str(e)
-            print(f"  ! Client {client_name} failed: {e}")
-            continue
+        # All clients failed this round — wait and retry once
+        if round_num == 0:
+            print(f"  ! All clients failed, waiting 3s before final retry...")
+            time.sleep(3)
 
     raise RuntimeError(
         f"Cannot download video {video_id}.\n"
