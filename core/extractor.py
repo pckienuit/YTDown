@@ -81,22 +81,33 @@ _visitor_data_cache: str = ""
 
 
 def _get_visitor_data(session: requests.Session) -> str:
-    """Fetch visitorData from YouTube homepage."""
+    """Extract visitorData from cookies (env var or session)."""
     global _visitor_data_cache
     if _visitor_data_cache:
         return _visitor_data_cache
 
-    # Allow override via environment variable
+    # 1. Environment variable override
     env_visitor = os.environ.get("VISITOR_DATA")
     if env_visitor:
         _visitor_data_cache = env_visitor
         print("  [DEBUG] Using VISITOR_DATA from environment")
         return _visitor_data_cache
 
+    # 2. Extract from session cookies (preferred for serverless)
+    visitor = session.cookies.get("VISITOR_INFO1_DATA")
+    if not visitor:
+        visitor = session.cookies.get("VISITOR_DATA")
+
+    if visitor:
+        _visitor_data_cache = visitor
+        print(f"  [DEBUG] Using VISITOR_DATA from cookies: {visitor[:20]}...")
+        return _visitor_data_cache
+
+    # 3. Fallback: fetch from YouTube homepage
     try:
         headers = get_browser_headers()
         headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-        
+
         resp = session.get("https://www.youtube.com/", headers=headers, timeout=10)
         html = resp.text
 
@@ -109,7 +120,7 @@ def _get_visitor_data(session: requests.Session) -> str:
             m = re.search(pattern, html)
             if m:
                 _visitor_data_cache = m.group(1)
-                print(f"  [DEBUG] Got visitorData: {_visitor_data_cache[:20]}...")
+                print(f"  [DEBUG] Got visitorData from homepage: {_visitor_data_cache[:20]}...")
                 return _visitor_data_cache
 
         print("  [WARN] Could not find VISITOR_DATA")
@@ -125,15 +136,35 @@ def _create_session() -> requests.Session:
     """Create a requests session with cookies."""
     session = requests.Session()
 
-    cookies = os.environ.get("YOUTUBE_COOKIES")
-    if cookies:
-        for part in cookies.split(";"):
-            part = part.strip()
-            if "=" in part:
-                name, value = part.split("=", 1)
-                name = name.strip()
-                value = value.strip()
-                session.cookies.set(name, value, domain=".youtube.com")
+    cookies_raw = os.environ.get("YOUTUBE_COOKIES")
+    if not cookies_raw:
+        return session
+
+    # Try JSON format first (DevTools export)
+    try:
+        import json
+        data = json.loads(cookies_raw)
+        cookies_list = data.get("cookies", [])
+        if cookies_list:
+            for c in cookies_list:
+                name = c.get("name", "")
+                value = c.get("value", "")
+                domain = c.get("domain", ".youtube.com")
+                if name and value:
+                    session.cookies.set(name, value, domain=domain)
+            print(f"  [DEBUG] Loaded {len(cookies_list)} cookies from JSON format")
+            return session
+    except (json.JSONDecodeError, ImportError):
+        pass
+
+    # String format: name=value; name2=value2
+    for part in cookies_raw.split(";"):
+        part = part.strip()
+        if "=" in part:
+            name, value = part.split("=", 1)
+            name = name.strip()
+            value = value.strip()
+            session.cookies.set(name, value, domain=".youtube.com")
 
     return session
 
@@ -141,6 +172,25 @@ def _create_session() -> requests.Session:
 # ─── InnerTube API ───────────────────────────────────────────────────────────
 
 _CLIENT_ORDER = ["ANDROID", "IOS", "ANDROID_VR", "TVHTML5", "WEB"]
+
+
+def _generate_sapisidhash(session: requests.Session) -> Optional[str]:
+    """Generate SAPISIDHASH from SAPISID cookie."""
+    import time
+    import hashlib
+
+    sapisid = session.cookies.get("SAPISID")
+    if not sapisid:
+        sapisid = session.cookies.get("__Secure-3PAPISID")
+
+    if not sapisid:
+        return None
+
+    timestamp = int(time.time())
+    origin = "https://www.youtube.com"
+    msg = f"{timestamp} {sapisid} {origin}"
+    hash_str = hashlib.sha1(msg.encode("utf-8")).hexdigest()
+    return f"SAPISIDHASH {timestamp}_{hash_str}"
 
 
 def _innertube_request(video_id: str, client_name: str, session: requests.Session) -> dict:
@@ -188,6 +238,12 @@ def _innertube_request(video_id: str, client_name: str, session: requests.Sessio
     headers = get_browser_headers()
     if visitor_data:
         headers["X-Goog-Visitor-Id"] = visitor_data
+
+    # Add Authorization header for WEB client (required by YouTube)
+    if client_name == "WEB":
+        auth = _generate_sapisidhash(session)
+        if auth:
+            headers["Authorization"] = auth
 
     resp = session.post(url, json=payload, headers=headers, timeout=15)
     
