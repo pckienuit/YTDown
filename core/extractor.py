@@ -93,7 +93,7 @@ def _get_visitor_data(session: requests.Session) -> str:
         print("  [DEBUG] Using VISITOR_DATA from environment")
         return _visitor_data_cache
 
-    # 2. Extract from session cookies (preferred for serverless)
+    # 2. Extract from session cookies
     visitor = session.cookies.get("VISITOR_INFO1_DATA")
     if not visitor:
         visitor = session.cookies.get("VISITOR_DATA")
@@ -103,30 +103,36 @@ def _get_visitor_data(session: requests.Session) -> str:
         print(f"  [DEBUG] Using VISITOR_DATA from cookies: {visitor[:20]}...")
         return _visitor_data_cache
 
-    # 3. Fallback: fetch from YouTube homepage
-    try:
-        headers = get_browser_headers()
-        headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    # 3. Fetch from YouTube homepage (retry with delay on failure)
+    for attempt in range(3):
+        try:
+            headers = get_browser_headers()
+            headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 
-        resp = session.get("https://www.youtube.com/", headers=headers, timeout=10)
-        html = resp.text
+            resp = session.get("https://www.youtube.com/", headers=headers, timeout=15)
+            html = resp.text
 
-        patterns = [
-            r'"VISITOR_DATA"\s*:\s*"([^"]+)"',
-            r'"visitorData"\s*:\s*"([^"]+)"',
-        ]
+            patterns = [
+                r'"VISITOR_DATA"\s*:\s*"([^"]+)"',
+                r'"visitorData"\s*:\s*"([^"]+)"',
+            ]
 
-        for pattern in patterns:
-            m = re.search(pattern, html)
-            if m:
-                _visitor_data_cache = m.group(1)
-                print(f"  [DEBUG] Got visitorData from homepage: {_visitor_data_cache[:20]}...")
-                return _visitor_data_cache
+            for pattern in patterns:
+                m = re.search(pattern, html)
+                if m:
+                    _visitor_data_cache = m.group(1)
+                    print(f"  [DEBUG] Got VISITOR_DATA from homepage: {_visitor_data_cache[:20]}...")
+                    return _visitor_data_cache
 
-        print("  [WARN] Could not find VISITOR_DATA")
-    except Exception as e:
-        print(f"  [WARN] Failed to fetch VISITOR_DATA: {e}")
+            if attempt < 2:
+                print(f"  [WARN] No VISITOR_DATA in response (attempt {attempt + 1}), retrying in 2s...")
+                time.sleep(2)
+        except Exception as e:
+            if attempt < 2:
+                print(f"  [WARN] Failed to fetch VISITOR_DATA (attempt {attempt + 1}): {e}")
+                time.sleep(2)
 
+    print("  [WARN] Could not get VISITOR_DATA after all attempts")
     return ""
 
 
@@ -171,7 +177,8 @@ def _create_session() -> requests.Session:
 
 # ─── InnerTube API ───────────────────────────────────────────────────────────
 
-_CLIENT_ORDER = ["ANDROID", "IOS", "ANDROID_VR", "TVHTML5", "WEB"]
+# Try ANDROID_VR first (best bypass for most videos)
+_CLIENT_ORDER = ["ANDROID_VR", "TVHTML5", "ANDROID", "IOS", "WEB"]
 
 
 def _generate_sapisidhash(session: requests.Session) -> Optional[str]:
@@ -222,8 +229,9 @@ def _innertube_request(video_id: str, client_name: str, session: requests.Sessio
     }
 
     client = client_configs.get(client_name, client_configs["ANDROID"])
-    context = {"client": dict(client)}
+    context: dict = {"client": dict(client)}
 
+    # Try to get visitorData
     visitor_data = _get_visitor_data(session)
     if visitor_data:
         context["client"]["visitorData"] = visitor_data
@@ -236,17 +244,18 @@ def _innertube_request(video_id: str, client_name: str, session: requests.Sessio
     url = f"{_INNERTUBE_URL}?key={_INNERTUBE_KEY}&prettyPrint=false"
 
     headers = get_browser_headers()
+
+    # Add visitor ID header if available
     if visitor_data:
         headers["X-Goog-Visitor-Id"] = visitor_data
 
-    # Add Authorization header for WEB client (required by YouTube)
-    if client_name == "WEB":
-        auth = _generate_sapisidhash(session)
-        if auth:
-            headers["Authorization"] = auth
+    # Add Authorization header (required by WEB and some mobile clients)
+    auth = _generate_sapisidhash(session)
+    if auth:
+        headers["Authorization"] = auth
 
     resp = session.post(url, json=payload, headers=headers, timeout=15)
-    
+
     if resp.status_code == 429:
         raise RuntimeError("HTTP 429 Too Many Requests")
     if resp.status_code != 200:
